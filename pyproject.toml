@@ -1,0 +1,10 @@
+[project]
+name = "mlprojects"
+version = "0.1.0"
+description = "Personal ML learning and practice"
+requires-python = ">=3.14"
+dependencies = [
+    "torch>=2.12.0",
+    "torchaudio>=2.11.0",
+    "torchvision>=0.27.0",
+]
