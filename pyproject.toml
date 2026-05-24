@@ -44,7 +44,11 @@ target-version = ["py314"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=. --cov-report=term-missing --cov-omit=.venv/*,tests/*"
+pythonpath = ["."]
+addopts = "--cov=. --cov-report=term-missing"
+
+[tool.coverage.run]
+omit = [".venv/*", "tests/*"]
 
 [tool.pyright]
 pythonVersion = "3.14"
