@@ -28,21 +28,7 @@ MPS is the GPU backend — use `torch.device("mps")` for GPU acceleration.
 
 ## Before Committing
 
-Run both of these and fix all failures before committing:
-
-```bash
-uv run pytest          # unit tests with coverage
-uv run pre-commit run --all-files  # lint, format, type check
-```
-
-Pre-commit hooks (configured in `.pre-commit-config.yaml`) run automatically on `git commit`. They enforce:
-
-- **black** — code formatting (`line-length = 88`); auto-formats `.py` and `.ipynb` files
-- **ruff** — linting + import sorting; auto-fixes safe issues, fails on remaining errors
-- **nbstripout** — strips notebook output before committing
-- **pyright** — static type checking (`typeCheckingMode = "standard"`); all `.py` files must pass
-
-If a commit is rejected, the hooks will have auto-fixed what they can (black, ruff). Stage those changes and retry.
+Use the `precommit-check` skill.
 
 ## Testing
 

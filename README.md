@@ -34,7 +34,14 @@ Tests live in `tests/`, mirroring source layout. Coverage is printed automatical
 
 ## Linting & Formatting
 
-Hooks run automatically on `git commit`. To run manually against all files:
+Auto-format and fix before committing:
+
+```bash
+uv run black .                  # reformat all .py and .ipynb files in place
+uv run ruff check --fix .       # fix all auto-fixable lint issues
+```
+
+Then verify everything passes (including pyright and nbstripout):
 
 ```bash
 uv run pre-commit run --all-files
