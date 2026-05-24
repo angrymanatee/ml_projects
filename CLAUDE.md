@@ -26,4 +26,32 @@ MPS is the GPU backend — use `torch.device("mps")` for GPU acceleration.
 - PyTorch 2.12 + torchvision + torchaudio (MPS-enabled, no separate metal variant needed)
 - Dependencies in `pyproject.toml`, locked in `uv.lock`
 
-This CLAUDE.md will grow as projects take shape — add test/lint commands and architectural notes once meaningful structure exists.
+## Before Committing
+
+Run both of these and fix all failures before committing:
+
+```bash
+uv run pytest          # unit tests with coverage
+uv run pre-commit run --all-files  # lint, format, type check
+```
+
+Pre-commit hooks (configured in `.pre-commit-config.yaml`) run automatically on `git commit`. They enforce:
+
+- **black** — code formatting (`line-length = 88`); auto-formats `.py` and `.ipynb` files
+- **ruff** — linting + import sorting; auto-fixes safe issues, fails on remaining errors
+- **nbstripout** — strips notebook output before committing
+- **pyright** — static type checking (`typeCheckingMode = "standard"`); all `.py` files must pass
+
+If a commit is rejected, the hooks will have auto-fixed what they can (black, ruff). Stage those changes and retry.
+
+## Testing
+
+Tests live in `tests/`, mirroring the source layout (e.g. `common/paths.py` → `tests/common/test_paths.py`). No `__init__.py` files needed — `pythonpath = ["."]` in `pyproject.toml` handles imports.
+
+```bash
+uv run pytest                        # all tests
+uv run pytest tests/common/ -v       # specific directory
+uv run pytest -k test_name           # specific test
+```
+
+Coverage is reported automatically. Hypothesis is available for property-based tests.
