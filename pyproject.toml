@@ -20,5 +20,34 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "black[jupyter]>=26.5.1",
+    "hypothesis>=6.152.9",
     "nbstripout>=0.9.1",
+    "pre-commit>=4.6.0",
+    "pyright>=1.1.409",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.14",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501", "E402"]  # E501: line length handled by black; E402: common in notebooks
+
+[tool.black]
+line-length = 88
+target-version = ["py314"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=. --cov-report=term-missing --cov-omit=.venv/*,tests/*"
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"

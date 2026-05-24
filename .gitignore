@@ -1,4 +1,26 @@
+
+# Don't commit data directory
+data/
+
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 .DS_Store
+
+# test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# type checking
+.pyright/
+
+# jupyter
+.ipynb_checkpoints/
+
+# model artifacts (usually large binaries)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
