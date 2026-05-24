@@ -18,6 +18,23 @@ uv sync
 uv run jupyter lab
 ```
 
+Notebook kernels automatically `chdir` to the repo root on startup via `~/.ipython/profile_default/startup/00-repo-root.py` (a local machine config, not in this repo). It finds the git root and changes to it, so relative paths like `data/` resolve from the top level regardless of which subdirectory the notebook lives in.
+
+If this file is missing on a new machine, create it to restore the behavior:
+
+```python
+# ~/.ipython/profile_default/startup/00-repo-root.py
+import os, subprocess
+try:
+    root = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
+    ).decode().strip()
+    if os.getcwd() != root:
+        os.chdir(root)
+except Exception:
+    pass
+```
+
 **Scripts:**
 
 ```bash

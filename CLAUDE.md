@@ -20,6 +20,23 @@ uv sync         # sync the venv after pulling
 
 MPS is the GPU backend — use `torch.device("mps")` for GPU acceleration.
 
+## Notebook Working Directory
+
+Notebook kernels auto-`chdir` to the repo root via `~/.ipython/profile_default/startup/00-repo-root.py` (machine-local, not committed). This means relative paths in notebooks resolve from the repo root. If a notebook seems to have the wrong CWD, that file is likely missing — recreate it:
+
+```python
+# ~/.ipython/profile_default/startup/00-repo-root.py
+import os, subprocess
+try:
+    root = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL
+    ).decode().strip()
+    if os.getcwd() != root:
+        os.chdir(root)
+except Exception:
+    pass
+```
+
 ## Stack
 
 - Python 3.14, managed via `.python-version`
