@@ -2,19 +2,32 @@
 # Don't commit data directory
 data/
 
+# Python
 .venv/
 __pycache__/
 *.pyc
 *.pyo
-.DS_Store
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# uv
+.uv/
 
 # test / coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.hypothesis/
 
 # type checking
 .pyright/
+.mypy_cache/
+.ruff_cache/
 
 # jupyter
 .ipynb_checkpoints/
@@ -24,3 +37,18 @@ htmlcov/
 *.pth
 *.ckpt
 *.safetensors
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Emacs
+*~
+\#*\#
+.\#*
+*.elc
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
