@@ -16,6 +16,18 @@ def _date_index(df: pd.DataFrame) -> pd.DataFrame:
 
 
 class StoreData(Dataset):
+    """Store sales dataset for the Kaggle Store Sales forecasting competition.
+
+    Loads all CSVs on construction and builds a [time, store, family] sales
+    tensor. Acts as a sliding-window Dataset: each item is an (input, target)
+    pair of consecutive windows drawn from the training series.
+
+    Attributes:
+        train, test, sample_submission, stores, oil, holidays: raw DataFrames.
+        sales_tensor: float64 Tensor of shape [T, 54, 33].
+        families: Index mapping column position -> product family name.
+    """
+
     def __init__(
         self,
         window_lags: int = 60,
@@ -23,6 +35,15 @@ class StoreData(Dataset):
         data_dir: Path = _DATA_DIR,
         copy: bool = False,
     ) -> None:
+        """Load data and build the sales tensor.
+
+        Args:
+            window_lags: length of the input window fed to the model.
+            output_lags: length of the prediction horizon (competition uses 16).
+            data_dir: directory containing the competition CSVs.
+            copy: if True, copy the underlying numpy array so the tensor is
+                writable; costs ~2× memory.
+        """
         self.train = self._load_train(data_dir)
         self.test = self._load_test(data_dir)
         self.sample_submission = self._load_sample_submission(data_dir)
@@ -77,12 +98,14 @@ class StoreData(Dataset):
         return torch.from_numpy(arr), families  # type: ignore[attr-defined]
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
+        """Return (input, target) windows of shape [window_lags, 54, 33] and [output_lags, 54, 33]."""
         start = index
         mid = index + self.window_lags
         end = mid + self.output_lags
         return self.sales_tensor[start:mid], self.sales_tensor[mid:end]
 
     def __len__(self) -> int:
+        """Number of non-overlapping-free sliding windows; excludes the final output_lags days."""
         return self._len
 
     def __repr__(self) -> str:

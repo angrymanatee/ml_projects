@@ -46,6 +46,7 @@ except Exception:
 ## Python Conventions
 
 - Prefer `@dataclass` over `NamedTuple` for structured data.
+- Add docstrings to all public classes and functions. Explain the non-obvious: contracts, units, shape conventions, caveats. Don't restate the signature.
 
 ## Before Committing
 
