@@ -43,6 +43,10 @@ except Exception:
 - PyTorch 2.12 + torchvision + torchaudio (MPS-enabled, no separate metal variant needed)
 - Dependencies in `pyproject.toml`, locked in `uv.lock`
 
+## Python Conventions
+
+- Prefer `@dataclass` over `NamedTuple` for structured data.
+
 ## Before Committing
 
 Use the `precommit-check` skill.
