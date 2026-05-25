@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 from torch.utils.data import Dataset
 
 from common.paths import get_data_dir
@@ -112,3 +112,19 @@ class StoreData(Dataset):
     def __repr__(self) -> str:
         shape = self.sales_tensor.shape
         return f"StoreData(shape={shape}, window_lags={self.window_lags}, output_lags={self.output_lags})"
+
+
+class MSLELoss(nn.Module):
+    """Mean Squared Logarithmic Error loss.
+
+    Computes MSE(log(1 + input), log(1 + target)), which is the competition
+    metric (RMSLE) squared. Use sqrt on the output to recover RMSLE.
+    Inputs must be non-negative; log1p is used for numerical stability near zero.
+    """
+
+    def __init__(self, reduction: str = "mean") -> None:
+        super().__init__()
+        self._mse_loss = nn.MSELoss(reduction=reduction)
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        return self._mse_loss(torch.log1p(input), torch.log1p(target))  # type: ignore[attr-defined]

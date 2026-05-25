@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 import torch
 
-from time_series.store_sales import StoreData
+from time_series.store_sales import MSLELoss, StoreData
 
 # ---------------------------------------------------------------------------
 # Shared synthetic fixtures
@@ -158,3 +158,35 @@ def test_custom_lags(mock_data_dir: Path) -> None:
     x, y = ds[0]
     assert x.shape[0] == 1
     assert y.shape[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — MSLELoss
+# ---------------------------------------------------------------------------
+
+
+def test_msle_loss_zero_on_identical_inputs() -> None:
+    loss = MSLELoss()
+    x = torch.tensor([1.0, 2.0, 3.0])  # type: ignore[attr-defined]
+    assert loss(x, x).item() == pytest.approx(0.0)
+
+
+def test_msle_loss_matches_manual_formula() -> None:
+    import math
+
+    loss = MSLELoss()
+    pred = torch.tensor([1.0, 2.0])  # type: ignore[attr-defined]
+    target = torch.tensor([2.0, 3.0])  # type: ignore[attr-defined]
+    pairs = [(1.0, 2.0), (2.0, 3.0)]
+    expected = sum((math.log1p(p) - math.log1p(t)) ** 2 for p, t in pairs) / len(pairs)
+    assert loss(pred, target).item() == pytest.approx(expected)
+
+
+def test_msle_loss_reduction_sum() -> None:
+    loss_mean = MSLELoss(reduction="mean")
+    loss_sum = MSLELoss(reduction="sum")
+    pred = torch.tensor([1.0, 2.0, 3.0])  # type: ignore[attr-defined]
+    target = torch.tensor([2.0, 3.0, 4.0])  # type: ignore[attr-defined]
+    assert loss_sum(pred, target).item() == pytest.approx(
+        loss_mean(pred, target).item() * 3
+    )
