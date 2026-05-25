@@ -9,8 +9,7 @@ from common.paths import get_data_dir
 
 
 def _date_index(df: pd.DataFrame) -> pd.DataFrame:
-    df["date"] = pd.to_datetime(df["date"])
-    return df.set_index("date")
+    return df.set_index(pd.to_datetime(df["date"]))
 
 
 class StoreData(Dataset):
@@ -91,7 +90,7 @@ class StoreData(Dataset):
         pivot = train.pivot(columns=("store_nbr", "family"), values="sales").sort_index(
             axis="columns"
         )
-        families: pd.Index = pivot[1].columns
+        families: pd.Index = pivot.columns.get_level_values("family").unique()
         num_families = len(families)
         arr = pivot.to_numpy().reshape(pivot.shape[0], num_stores, num_families)
         if copy:
@@ -106,7 +105,7 @@ class StoreData(Dataset):
         return self.sales_tensor[start:mid], self.sales_tensor[mid:end]
 
     def __len__(self) -> int:
-        """Number of non-overlapping-free sliding windows; excludes the final output_lags days."""
+        """Number of stride-1 sliding windows; excludes the final output_lags days."""
         return self._len
 
     def __repr__(self) -> str:

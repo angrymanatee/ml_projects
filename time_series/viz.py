@@ -16,6 +16,10 @@ from plotly.subplots import make_subplots  # pyright: ignore[reportMissingImport
 from torch import Tensor
 
 
+def _to_numpy(tensor: Tensor) -> np.ndarray:
+    return tensor.detach().cpu().numpy()
+
+
 def plot_series(
     targets: Tensor,
     stores: pd.DataFrame,
@@ -67,7 +71,7 @@ def plot_series(
         for family_name in family:
             family_idx = cast(int, families.get_loc(family_name))
             label = f"s{store}/{family_name}"
-            actual = targets[:, store_idx, family_idx].numpy()
+            actual = _to_numpy(targets[:, store_idx, family_idx])
 
             fig.add_trace(
                 go.Scatter(x=x, y=actual, name=f"{label} actual", mode="lines"),
@@ -75,7 +79,7 @@ def plot_series(
                 col=1,
             )
             if has_pred:
-                pred = predictions[:, store_idx, family_idx].numpy()
+                pred = _to_numpy(predictions[:, store_idx, family_idx])
                 fig.add_trace(
                     go.Scatter(
                         x=x,
@@ -129,7 +133,9 @@ def plot_metric_grid(
     Returns:
         Interactive heatmap figure.
     """
-    metric_vals = metric.numpy() if isinstance(metric, Tensor) else np.asarray(metric)
+    metric_vals = (
+        _to_numpy(metric) if isinstance(metric, Tensor) else np.asarray(metric)
+    )
     store_labels = [f"Store {n}" for n in stores.index]
     family_labels = list(families)
 
@@ -174,8 +180,8 @@ def plot_scatter_pred_vs_actual(
     Returns:
         Scatter figure with y = x reference line.
     """
-    pred_vals = predictions.numpy().ravel().astype(float)
-    target_vals = targets.numpy().ravel().astype(float)
+    pred_vals = _to_numpy(predictions).ravel().astype(float)
+    target_vals = _to_numpy(targets).ravel().astype(float)
 
     if log_scale:
         pred_vals = np.log1p(pred_vals)
@@ -226,14 +232,17 @@ def plot_error_distribution(
     Systematic offsets reveal bias; heavy tails flag problematic outliers.
 
     Args:
-        predictions: any shape; flattened.
-        targets: same shape as predictions.
+        predictions: any shape; flattened. Must be non-negative — log1p(x) is
+            undefined for x < -1 and will silently produce NaN.
+        targets: same shape as predictions. Same non-negativity requirement.
         title: figure title.
 
     Returns:
         Histogram figure with a vertical line at zero.
     """
-    errors = np.log1p(predictions.numpy().ravel()) - np.log1p(targets.numpy().ravel())
+    errors = np.log1p(_to_numpy(predictions).ravel()) - np.log1p(
+        _to_numpy(targets).ravel()
+    )
     fig = go.Figure(go.Histogram(x=errors, nbinsx=100, name="error"))
     fig.add_vline(x=0.0, line_dash="dash", line_color="red", annotation_text="zero")
     fig.update_layout(
