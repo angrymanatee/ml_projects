@@ -18,32 +18,60 @@ class StoreData(Dataset):
         data_dir: Path = _DATA_DIR,
         copy: bool = False,
     ) -> None:
+        (
+            self.train,
+            self.test,
+            self.sample_submission,
+            self.stores,
+            self.oil,
+            self.holidays,
+        ) = self._load_data(data_dir)
+
+        self.window_lags = window_lags
+        self.output_lags = output_lags
+        self.sales_tensor, self.families = self._setup_tensor(
+            self.train, self.stores, copy
+        )
+        self._len = self.sales_tensor.shape[0] - window_lags - output_lags
+
+    @staticmethod
+    def _load_data(
+        data_dir: Path,
+    ) -> tuple[
+        pd.DataFrame,
+        pd.DataFrame,
+        pd.DataFrame,
+        pd.DataFrame,
+        pd.DataFrame,
+        pd.DataFrame,
+    ]:
         def _date_index(df: pd.DataFrame) -> pd.DataFrame:
             df["date"] = pd.to_datetime(df["date"])
             return df.set_index("date")
 
-        self.train = _date_index(pd.read_csv(data_dir / "train.csv"))
-        self.test = _date_index(pd.read_csv(data_dir / "test.csv"))
-        self.sample_submission = pd.read_csv(data_dir / "sample_submission.csv")
-        self.stores = pd.read_csv(data_dir / "stores.csv").set_index("store_nbr")
-        self.oil = _date_index(pd.read_csv(data_dir / "oil.csv"))
-        self.holidays = _date_index(pd.read_csv(data_dir / "holidays_events.csv"))
+        return (
+            _date_index(pd.read_csv(data_dir / "train.csv")),
+            _date_index(pd.read_csv(data_dir / "test.csv")),
+            pd.read_csv(data_dir / "sample_submission.csv"),
+            pd.read_csv(data_dir / "stores.csv").set_index("store_nbr"),
+            _date_index(pd.read_csv(data_dir / "oil.csv")),
+            _date_index(pd.read_csv(data_dir / "holidays_events.csv")),
+        )
 
-        self.window_lags = window_lags
-        self.output_lags = output_lags
-
-        num_stores = self.stores.shape[0]
-        pivot = self.train.pivot(
-            columns=("store_nbr", "family"), values="sales"
-        ).sort_index(axis="columns")
-        self.families: pd.Index = pivot[1].columns
-        num_families = len(self.families)
+    @staticmethod
+    def _setup_tensor(
+        train: pd.DataFrame, stores: pd.DataFrame, copy: bool = False
+    ) -> tuple[Tensor, pd.Index]:
+        num_stores = stores.shape[0]
+        pivot = train.pivot(columns=("store_nbr", "family"), values="sales").sort_index(
+            axis="columns"
+        )
+        families: pd.Index = pivot[1].columns
+        num_families = len(families)
         arr = pivot.to_numpy().reshape(pivot.shape[0], num_stores, num_families)
         if copy:
             arr = arr.copy()
-        self.sales_tensor: Tensor = torch.from_numpy(arr)  # type: ignore[attr-defined]
-
-        self._len = self.sales_tensor.shape[0] - window_lags - output_lags
+        return torch.from_numpy(arr), families  # type: ignore[attr-defined]
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         start = index
