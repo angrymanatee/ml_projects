@@ -7,6 +7,7 @@ notebooks and can be exported via ``fig.write_html`` / ``fig.write_image``.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -61,12 +62,12 @@ def plot_series(
     )
     x = np.array(dates) if dates is not None else np.arange(targets.shape[0])
 
-    for s in store_nbr:
-        s_idx = stores.index.get_loc(s)
-        for fam in family:
-            f_idx = families.get_loc(fam)
-            label = f"s{s}/{fam}"
-            actual = targets[:, s_idx, f_idx].numpy()
+    for store in store_nbr:
+        store_idx = cast(int, stores.index.get_loc(store))
+        for family_name in family:
+            family_idx = cast(int, families.get_loc(family_name))
+            label = f"s{store}/{family_name}"
+            actual = targets[:, store_idx, family_idx].numpy()
 
             fig.add_trace(
                 go.Scatter(x=x, y=actual, name=f"{label} actual", mode="lines"),
@@ -74,7 +75,7 @@ def plot_series(
                 col=1,
             )
             if has_pred:
-                pred = predictions[:, s_idx, f_idx].numpy()
+                pred = predictions[:, store_idx, family_idx].numpy()
                 fig.add_trace(
                     go.Scatter(
                         x=x,
@@ -128,13 +129,13 @@ def plot_metric_grid(
     Returns:
         Interactive heatmap figure.
     """
-    z = metric.numpy() if isinstance(metric, Tensor) else np.asarray(metric)
+    metric_vals = metric.numpy() if isinstance(metric, Tensor) else np.asarray(metric)
     store_labels = [f"Store {n}" for n in stores.index]
     family_labels = list(families)
 
     fig = go.Figure(
         go.Heatmap(
-            z=z,
+            z=metric_vals,
             x=family_labels,
             y=store_labels,
             colorscale=colorscale,
@@ -173,22 +174,25 @@ def plot_scatter_pred_vs_actual(
     Returns:
         Scatter figure with y = x reference line.
     """
-    p = predictions.numpy().ravel().astype(float)
-    t = targets.numpy().ravel().astype(float)
+    pred_vals = predictions.numpy().ravel().astype(float)
+    target_vals = targets.numpy().ravel().astype(float)
 
     if log_scale:
-        p = np.log1p(p)
-        t = np.log1p(t)
+        pred_vals = np.log1p(pred_vals)
+        target_vals = np.log1p(target_vals)
         axis_label = "log(1 + sales)"
     else:
         axis_label = "sales"
 
-    lim = (float(min(p.min(), t.min())), float(max(p.max(), t.max())))
+    axis_lim = (
+        float(min(pred_vals.min(), target_vals.min())),
+        float(max(pred_vals.max(), target_vals.max())),
+    )
     fig = go.Figure()
     fig.add_trace(
         go.Scattergl(
-            x=t,
-            y=p,
+            x=target_vals,
+            y=pred_vals,
             mode="markers",
             marker=dict(size=3, opacity=0.3),
             name="samples",
@@ -196,8 +200,8 @@ def plot_scatter_pred_vs_actual(
     )
     fig.add_trace(
         go.Scatter(
-            x=list(lim),
-            y=list(lim),
+            x=list(axis_lim),
+            y=list(axis_lim),
             mode="lines",
             line=dict(color="red", dash="dash"),
             name="y = x",
