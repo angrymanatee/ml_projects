@@ -11,8 +11,8 @@ from typing import cast
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go  # pyright: ignore[reportMissingImports]
-from plotly.subplots import make_subplots  # pyright: ignore[reportMissingImports]
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from torch import Tensor
 
 
