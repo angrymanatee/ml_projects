@@ -5,8 +5,6 @@ import torch
 from common.paths import get_data_dir
 from time_series.store_sales import StoreData
 
-_DATA_DIR = get_data_dir() / "store-sales-time-series-forecasting"
-
 
 @pytest.fixture(scope="module")
 def ds() -> StoreData:
@@ -61,11 +59,13 @@ def test_custom_lags() -> None:
 
 
 def test_load_train_date_index() -> None:
-    assert isinstance(StoreData._load_train(_DATA_DIR).index, pd.DatetimeIndex)
+    data_dir = get_data_dir() / "store-sales-time-series-forecasting"
+    assert isinstance(StoreData._load_train(data_dir).index, pd.DatetimeIndex)
 
 
 def test_load_stores_index() -> None:
-    assert StoreData._load_stores(_DATA_DIR).index.name == "store_nbr"
+    data_dir = get_data_dir() / "store-sales-time-series-forecasting"
+    assert StoreData._load_stores(data_dir).index.name == "store_nbr"
 
 
 # --- _setup_tensor ---

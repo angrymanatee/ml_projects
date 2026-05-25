@@ -7,8 +7,6 @@ from torch.utils.data import Dataset
 
 from common.paths import get_data_dir
 
-_DATA_DIR = get_data_dir() / "store-sales-time-series-forecasting"
-
 
 def _date_index(df: pd.DataFrame) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"])
@@ -32,7 +30,7 @@ class StoreData(Dataset):
         self,
         window_lags: int = 60,
         output_lags: int = 16,
-        data_dir: Path = _DATA_DIR,
+        data_dir: Path | None = None,
         copy: bool = False,
     ) -> None:
         """Load data and build the sales tensor.
@@ -40,10 +38,13 @@ class StoreData(Dataset):
         Args:
             window_lags: length of the input window fed to the model.
             output_lags: length of the prediction horizon (competition uses 16).
-            data_dir: directory containing the competition CSVs.
+            data_dir: directory containing the competition CSVs. Defaults to
+                <repo_root>/data/store-sales-time-series-forecasting.
             copy: if True, copy the underlying numpy array so the tensor is
                 writable; costs ~2× memory.
         """
+        if data_dir is None:
+            data_dir = get_data_dir() / "store-sales-time-series-forecasting"
         self.train = self._load_train(data_dir)
         self.test = self._load_test(data_dir)
         self.sample_submission = self._load_sample_submission(data_dir)
