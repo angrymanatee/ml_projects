@@ -10,6 +10,11 @@ from common.paths import get_data_dir
 _DATA_DIR = get_data_dir() / "store-sales-time-series-forecasting"
 
 
+def _date_index(df: pd.DataFrame) -> pd.DataFrame:
+    df["date"] = pd.to_datetime(df["date"])
+    return df.set_index("date")
+
+
 class StoreData(Dataset):
     def __init__(
         self,
@@ -18,14 +23,12 @@ class StoreData(Dataset):
         data_dir: Path = _DATA_DIR,
         copy: bool = False,
     ) -> None:
-        (
-            self.train,
-            self.test,
-            self.sample_submission,
-            self.stores,
-            self.oil,
-            self.holidays,
-        ) = self._load_data(data_dir)
+        self.train = self._load_train(data_dir)
+        self.test = self._load_test(data_dir)
+        self.sample_submission = self._load_sample_submission(data_dir)
+        self.stores = self._load_stores(data_dir)
+        self.oil = self._load_oil(data_dir)
+        self.holidays = self._load_holidays(data_dir)
 
         self.window_lags = window_lags
         self.output_lags = output_lags
@@ -35,28 +38,28 @@ class StoreData(Dataset):
         self._len = self.sales_tensor.shape[0] - window_lags - output_lags
 
     @staticmethod
-    def _load_data(
-        data_dir: Path,
-    ) -> tuple[
-        pd.DataFrame,
-        pd.DataFrame,
-        pd.DataFrame,
-        pd.DataFrame,
-        pd.DataFrame,
-        pd.DataFrame,
-    ]:
-        def _date_index(df: pd.DataFrame) -> pd.DataFrame:
-            df["date"] = pd.to_datetime(df["date"])
-            return df.set_index("date")
+    def _load_train(data_dir: Path) -> pd.DataFrame:
+        return _date_index(pd.read_csv(data_dir / "train.csv"))
 
-        return (
-            _date_index(pd.read_csv(data_dir / "train.csv")),
-            _date_index(pd.read_csv(data_dir / "test.csv")),
-            pd.read_csv(data_dir / "sample_submission.csv"),
-            pd.read_csv(data_dir / "stores.csv").set_index("store_nbr"),
-            _date_index(pd.read_csv(data_dir / "oil.csv")),
-            _date_index(pd.read_csv(data_dir / "holidays_events.csv")),
-        )
+    @staticmethod
+    def _load_test(data_dir: Path) -> pd.DataFrame:
+        return _date_index(pd.read_csv(data_dir / "test.csv"))
+
+    @staticmethod
+    def _load_sample_submission(data_dir: Path) -> pd.DataFrame:
+        return pd.read_csv(data_dir / "sample_submission.csv")
+
+    @staticmethod
+    def _load_stores(data_dir: Path) -> pd.DataFrame:
+        return pd.read_csv(data_dir / "stores.csv").set_index("store_nbr")
+
+    @staticmethod
+    def _load_oil(data_dir: Path) -> pd.DataFrame:
+        return _date_index(pd.read_csv(data_dir / "oil.csv"))
+
+    @staticmethod
+    def _load_holidays(data_dir: Path) -> pd.DataFrame:
+        return _date_index(pd.read_csv(data_dir / "holidays_events.csv"))
 
     @staticmethod
     def _setup_tensor(
