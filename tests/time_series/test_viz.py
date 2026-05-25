@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.graph_objects as go  # pyright: ignore[reportMissingImports]
 import torch
 
-from time_series.viz import (
+from time_series.viz import (  # pyright: ignore[reportMissingImports]
     plot_error_distribution,
     plot_metric_grid,
     plot_scatter_pred_vs_actual,

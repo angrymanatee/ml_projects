@@ -10,8 +10,8 @@ from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import plotly.graph_objects as go  # pyright: ignore[reportMissingImports]
+from plotly.subplots import make_subplots  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 
 
