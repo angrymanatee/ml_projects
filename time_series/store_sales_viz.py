@@ -11,9 +11,12 @@ from typing import cast
 
 import numpy as np
 import pandas as pd
+import plotly.colors
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from torch import Tensor
+
+_COLOR_CYCLE = plotly.colors.qualitative.Plotly
 
 
 def _to_numpy(tensor: Tensor) -> np.ndarray:
@@ -66,15 +69,24 @@ def plot_series(
     )
     x = np.array(dates) if dates is not None else np.arange(targets.shape[0])
 
+    series_idx = 0
     for store in store_nbr:
         store_idx = cast(int, stores.index.get_loc(store))
         for family_name in family:
             family_idx = cast(int, families.get_loc(family_name))
             label = f"s{store}/{family_name}"
+            color = _COLOR_CYCLE[series_idx % len(_COLOR_CYCLE)]
+            series_idx += 1
             actual = _to_numpy(targets[:, store_idx, family_idx])
 
             fig.add_trace(
-                go.Scatter(x=x, y=actual, name=f"{label} actual", mode="lines"),
+                go.Scatter(
+                    x=x,
+                    y=actual,
+                    name=f"{label} actual",
+                    mode="lines",
+                    line=dict(color=color),
+                ),
                 row=1,
                 col=1,
             )
@@ -86,7 +98,7 @@ def plot_series(
                         y=pred,
                         name=f"{label} pred",
                         mode="lines",
-                        line=dict(dash="dash"),
+                        line=dict(color=color, dash="dash"),
                     ),
                     row=1,
                     col=1,
@@ -98,6 +110,7 @@ def plot_series(
                         name=f"{label} error",
                         mode="lines",
                         fill="tozeroy",
+                        line=dict(color=color),
                     ),
                     row=2,
                     col=1,

@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import torch
 
-from time_series.viz import (
+from time_series.store_sales_viz import (
     plot_error_distribution,
     plot_metric_grid,
     plot_scatter_pred_vs_actual,
