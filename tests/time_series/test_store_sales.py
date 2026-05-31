@@ -25,7 +25,7 @@ def mock_train() -> pd.DataFrame:
         )
     ]
     df = pd.DataFrame(
-        rows, columns=["date", "store_nbr", "family", "sales", "onpromotion"]
+        rows, columns=pd.Index(["date", "store_nbr", "family", "sales", "onpromotion"])
     )
     return df.set_index(pd.DatetimeIndex(df.pop("date"), name="date"))
 
@@ -111,6 +111,12 @@ def test_sales_tensor_dtype(ds: StoreData) -> None:
 
 def test_len(ds: StoreData) -> None:
     assert len(ds) == ds.sales_tensor.shape[0] - ds.window_lags - ds.output_lags
+
+
+def test_repr(ds: StoreData) -> None:
+    r = repr(ds)
+    assert "StoreData" in r
+    assert str(ds.sales_tensor.shape) in r
 
 
 def test_item_shapes(ds: StoreData) -> None:
