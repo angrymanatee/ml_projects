@@ -1,6 +1,7 @@
 
-# Don't commit data directory
+# Don't commit data directories
 data/
+mlflow/
 
 # Python
 .venv/
