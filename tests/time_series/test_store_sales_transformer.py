@@ -3,12 +3,12 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import mlflow
 import pytest
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, TensorDataset
 
+import mlflow
 from time_series.main_store_sales_transformer import StoreSalesTransformer
 from time_series.store_sales import MSLELoss, Trainer
 

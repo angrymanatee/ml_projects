@@ -4,11 +4,11 @@ Run with:
     uv run python -m time_series.main_store_sales_transformer
 """
 
-import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.store_sales import MSLELoss, StoreData, Trainer
