@@ -21,7 +21,7 @@ class StoreData(Dataset):
 
     Attributes:
         train, test, sample_submission, stores, oil, holidays: raw DataFrames.
-        sales_tensor: float64 Tensor of shape [T, 54, 33].
+        sales_tensor: float32 Tensor of shape [T, 54, 33].
         families: Index mapping column position -> product family name.
     """
 
@@ -31,6 +31,7 @@ class StoreData(Dataset):
         output_lags: int = 16,
         data_dir: Path | None = None,
         copy: bool = False,
+        dtype: torch.dtype = torch.float32,  # pyright: ignore[reportPrivateImportUsage]
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -44,6 +45,7 @@ class StoreData(Dataset):
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
+        self.dtype = dtype
         self.train = self._load_train(data_dir)
         self.test = self._load_test(data_dir)
         self.sample_submission = self._load_sample_submission(data_dir)
@@ -54,7 +56,7 @@ class StoreData(Dataset):
         self.window_lags = window_lags
         self.output_lags = output_lags
         self.sales_tensor, self.families = self._setup_tensor(
-            self.train, self.stores, copy
+            self.train, self.stores, dtype, copy
         )
         self._len = self.sales_tensor.shape[0] - window_lags - output_lags
 
@@ -84,7 +86,10 @@ class StoreData(Dataset):
 
     @staticmethod
     def _setup_tensor(
-        train: pd.DataFrame, stores: pd.DataFrame, copy: bool = False
+        train: pd.DataFrame,
+        stores: pd.DataFrame,
+        dtype: torch.dtype = torch.float32,  # pyright: ignore[reportPrivateImportUsage]
+        copy: bool = False,
     ) -> tuple[Tensor, pd.Index]:
         num_stores = stores.shape[0]
         pivot = train.pivot(columns=("store_nbr", "family"), values="sales").sort_index(
@@ -95,7 +100,7 @@ class StoreData(Dataset):
         arr = pivot.to_numpy().reshape(pivot.shape[0], num_stores, num_families)
         if copy:
             arr = arr.copy()
-        return torch.from_numpy(arr), families  # type: ignore[attr-defined]
+        return torch.from_numpy(arr).to(dtype), families  # type: ignore[attr-defined]
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return (input, target) windows of shape [window_lags, 54, 33] and [output_lags, 54, 33]."""

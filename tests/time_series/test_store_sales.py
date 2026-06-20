@@ -106,7 +106,7 @@ def test_sales_tensor_shape(ds: StoreData) -> None:
 
 
 def test_sales_tensor_dtype(ds: StoreData) -> None:
-    assert ds.sales_tensor.dtype == torch.float64  # type: ignore[attr-defined]
+    assert ds.sales_tensor.dtype == torch.float32  # type: ignore[attr-defined]
 
 
 def test_len(ds: StoreData) -> None:
