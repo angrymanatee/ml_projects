@@ -2,31 +2,19 @@
 
 Run with:
     uv run python -m time_series.main_store_sales_transformer
+    uv run python -m time_series.main_store_sales_transformer --epochs 100 --lr 3e-4 --d-model 256
 """
 
+import argparse
+
+import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.store_sales import MSLELoss, StoreData, Trainer
-
-# ---------------------------------------------------------------------------
-# Hyperparameters
-# ---------------------------------------------------------------------------
-
-EPOCHS = 500
-SAVE_EVERY_N_EPOCHS = 50
-LEARNING_RATE = 1e-3
-SPLIT_FRACTION = 0.9
-BATCH_SIZE = 128
-
-# Transformer architecture
-D_MODEL = 128
-NHEAD = 4
-
 
 # ---------------------------------------------------------------------------
 # Model
@@ -38,7 +26,7 @@ class StoreSalesTransformer(nn.Module):
 
     Maps an input window of shape [batch, window_lags, n_stores, n_families]
     to a prediction window of shape [batch, output_lags, n_stores, n_families].
-    The spatial dimensions (store × family) are flattened into a single feature
+    The spatial dimensions (store x family) are flattened into a single feature
     vector per time step and projected into d_model before the transformer.
     """
 
@@ -47,8 +35,8 @@ class StoreSalesTransformer(nn.Module):
         n_stores: int,
         n_families: int,
         n_output_steps: int,
-        d_model: int = D_MODEL,
-        nhead: int = NHEAD,
+        d_model: int = 128,
+        nhead: int = 4,
     ) -> None:
         super().__init__()
         embedding_size = n_stores * n_families
@@ -92,7 +80,33 @@ class StoreSalesTransformer(nn.Module):
 # ---------------------------------------------------------------------------
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train StoreSalesTransformer")
+    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=50,
+        metavar="N",
+        help="save a checkpoint every N epochs (default: 50)",
+    )
+    parser.add_argument("--lr", type=float, default=1e-3, metavar="LR")
+    parser.add_argument(
+        "--split",
+        type=float,
+        default=0.9,
+        metavar="FRAC",
+        help="train/val split fraction (default: 0.9)",
+    )
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--d-model", type=int, default=128)
+    parser.add_argument("--nhead", type=int, default=4)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+
     device = (
         torch.device("mps")
         if torch.backends.mps.is_available()
@@ -103,16 +117,20 @@ def main() -> None:
     n_stores = store_data.stores.shape[0]
     n_families = store_data.families.size
 
-    split_loc = int(len(store_data) * SPLIT_FRACTION)
+    split_loc = int(len(store_data) * args.split)
     train_data = Subset(store_data, range(0, split_loc))
     val_data = Subset(store_data, range(split_loc, len(store_data)))
-    train_loader = DataLoader[Tensor](train_data, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader[Tensor](val_data, batch_size=BATCH_SIZE)
+    train_loader = DataLoader[Tensor](
+        train_data, batch_size=args.batch_size, shuffle=True
+    )
+    val_loader = DataLoader[Tensor](val_data, batch_size=args.batch_size)
 
     model = StoreSalesTransformer(
         n_stores=n_stores,
         n_families=n_families,
         n_output_steps=store_data.output_lags,
+        d_model=args.d_model,
+        nhead=args.nhead,
     )
 
     mlflow.pytorch.autolog()
@@ -139,12 +157,12 @@ def main() -> None:
     ):
         mlflow.log_params(
             {
-                "epochs": EPOCHS,
-                "learning_rate": LEARNING_RATE,
-                "split_fraction": SPLIT_FRACTION,
-                "batch_size": BATCH_SIZE,
-                "d_model": D_MODEL,
-                "nhead": NHEAD,
+                "epochs": args.epochs,
+                "learning_rate": args.lr,
+                "split_fraction": args.split,
+                "batch_size": args.batch_size,
+                "d_model": args.d_model,
+                "nhead": args.nhead,
             }
         )
         trainer = Trainer(
@@ -152,10 +170,10 @@ def main() -> None:
             device=device,
             train_loader=train_loader,
             val_loader=val_loader,
-            learning_rate=LEARNING_RATE,
+            learning_rate=args.lr,
             loss_func=MSLELoss(),
         )
-        trainer.train(EPOCHS, save_every_n_epochs=SAVE_EVERY_N_EPOCHS)
+        trainer.train(args.epochs, save_every_n_epochs=args.save_every)
 
 
 if __name__ == "__main__":
