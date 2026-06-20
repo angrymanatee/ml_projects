@@ -1,0 +1,162 @@
+"""Train a Transformer model on the Kaggle Store Sales dataset.
+
+Run with:
+    uv run python -m time_series.main_store_sales_transformer
+"""
+
+import mlflow
+import torch
+from torch import Tensor, nn
+from torch.utils.data import DataLoader, Subset
+
+from common.git import get_branch, get_sha
+from common.model_registry import TRACKING_URI
+from time_series.store_sales import MSLELoss, StoreData, Trainer
+
+# ---------------------------------------------------------------------------
+# Hyperparameters
+# ---------------------------------------------------------------------------
+
+EPOCHS = 500
+SAVE_EVERY_N_EPOCHS = 50
+LEARNING_RATE = 1e-3
+SPLIT_FRACTION = 0.9
+BATCH_SIZE = 128
+
+# Transformer architecture
+D_MODEL = 128
+NHEAD = 4
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+
+
+class StoreSalesTransformer(nn.Module):
+    """Transformer encoder-decoder for multi-step store sales forecasting.
+
+    Maps an input window of shape [batch, window_lags, n_stores, n_families]
+    to a prediction window of shape [batch, output_lags, n_stores, n_families].
+    The spatial dimensions (store × family) are flattened into a single feature
+    vector per time step and projected into d_model before the transformer.
+    """
+
+    def __init__(
+        self,
+        n_stores: int,
+        n_families: int,
+        n_output_steps: int,
+        d_model: int = D_MODEL,
+        nhead: int = NHEAD,
+    ) -> None:
+        super().__init__()
+        embedding_size = n_stores * n_families
+        self.embedding_size = embedding_size
+        self.n_output_steps = n_output_steps
+        self.input_transform = nn.Linear(embedding_size, d_model)
+        self.output_transform = nn.Linear(d_model, embedding_size)
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=nhead,
+            batch_first=True,
+        )
+        self.output_relu = nn.ReLU()
+        self._n_stores = n_stores
+        self._n_families = n_families
+
+    def forward(self, input: Tensor) -> Tensor:
+        """
+        Args:
+            input: [batch, window_lags, n_stores, n_families]
+        Returns:
+            [batch, n_output_steps, n_stores, n_families]
+        """
+        input_internal = self.input_transform(input.flatten(-2))
+        tgt_internal = torch.zeros(
+            input_internal.shape[0],
+            self.n_output_steps,
+            self.transformer.d_model,
+            dtype=input_internal.dtype,
+            device=input_internal.device,
+        )
+        output_internal = self.transformer(input_internal, tgt_internal)
+        out_shape = (-1, self.n_output_steps, self._n_stores, self._n_families)
+        return self.output_relu(
+            self.output_transform(output_internal).reshape(out_shape)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    device = (
+        torch.device("mps")
+        if torch.backends.mps.is_available()
+        else torch.device("cpu")
+    )
+
+    store_data = StoreData(dtype=torch.float32)
+    n_stores = store_data.stores.shape[0]
+    n_families = store_data.families.size
+
+    split_loc = int(len(store_data) * SPLIT_FRACTION)
+    train_data = Subset(store_data, range(0, split_loc))
+    val_data = Subset(store_data, range(split_loc, len(store_data)))
+    train_loader = DataLoader[Tensor](train_data, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader[Tensor](val_data, batch_size=BATCH_SIZE)
+
+    model = StoreSalesTransformer(
+        n_stores=n_stores,
+        n_families=n_families,
+        n_output_steps=store_data.output_lags,
+    )
+
+    mlflow.pytorch.autolog()
+    mlflow.set_tracking_uri(TRACKING_URI)
+    mlflow.set_experiment("StoreSales_TransformerBasic")
+    mlflow.set_experiment_tags(
+        {
+            "dataset": "store-sales-kaggle",
+            "task": "time-series-forecasting",
+            "loss": "RMSLE",
+            "prediction_horizon_days": str(store_data.output_lags),
+        }
+    )
+
+    with mlflow.start_run(
+        tags={
+            "architecture": "transformer",
+            "input_window_days": str(store_data.window_lags),
+            "output_window_days": str(store_data.output_lags),
+            "device": str(device),
+            "git_branch": get_branch(),
+            "git_sha": get_sha(),
+        }
+    ):
+        mlflow.log_params(
+            {
+                "epochs": EPOCHS,
+                "learning_rate": LEARNING_RATE,
+                "split_fraction": SPLIT_FRACTION,
+                "batch_size": BATCH_SIZE,
+                "d_model": D_MODEL,
+                "nhead": NHEAD,
+            }
+        )
+        trainer = Trainer(
+            model=model,
+            device=device,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            learning_rate=LEARNING_RATE,
+            loss_func=MSLELoss(),
+        )
+        trainer.train(EPOCHS, save_every_n_epochs=SAVE_EVERY_N_EPOCHS)
+
+
+if __name__ == "__main__":
+    main()
