@@ -7,14 +7,15 @@ Run with:
 
 import argparse
 
-import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.store_sales import MSLELoss, StoreData, Trainer
+from time_series.store_sales_viz import StoreSalesAnalyzer
 
 # ---------------------------------------------------------------------------
 # Model
@@ -174,6 +175,13 @@ def main() -> None:
             loss_func=MSLELoss(),
         )
         trainer.train(args.epochs, save_every_n_epochs=args.save_every)
+        StoreSalesAnalyzer(
+            model=model,
+            data_loader=val_loader,
+            stores=store_data.stores,
+            families=store_data.families,
+            device=device,
+        ).run()
 
 
 if __name__ == "__main__":

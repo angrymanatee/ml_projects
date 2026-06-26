@@ -6,15 +6,21 @@ notebooks and can be exported via ``fig.write_html`` / ``fig.write_image``.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 from typing import cast
 
 import numpy as np
 import pandas as pd
 import plotly.colors
 import plotly.graph_objects as go
+import torch
 from plotly.subplots import make_subplots
-from torch import Tensor
+from torch import Tensor, nn
+from torch.utils.data import DataLoader
+
+import mlflow
 
 _COLOR_CYCLE = plotly.colors.qualitative.Plotly
 
@@ -292,3 +298,120 @@ def plot_training_curve(
         )
     fig.update_layout(title=title, xaxis_title="epoch", yaxis_title="loss")
     return fig
+
+
+class StoreSalesAnalyzer:
+    """Runs post-training analysis and logs plots as MLflow HTML artifacts.
+
+    Collects model predictions over a DataLoader, then generates a
+    predicted-vs-actual scatter, log-space error distribution, and a
+    per-(store, family) RMSLE heatmap. All plots are logged to the active
+    MLflow run under the ``analysis/`` artifact directory.
+
+    Must be called within an active mlflow.start_run() context.
+
+    Args:
+        model: trained model to evaluate; will be set to eval mode.
+        data_loader: DataLoader yielding (input, target) batches where
+            target has shape [batch, output_lags, n_stores, n_families].
+        stores: DataFrame indexed by store_nbr (from StoreData.stores).
+        families: Index mapping column position to family name (from
+            StoreData.families).
+        device: device on which to run inference.
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        data_loader: DataLoader,  # type: ignore[type-arg]
+        stores: pd.DataFrame,
+        families: pd.Index,
+        device: torch.device,
+    ) -> None:
+        self.model = model
+        self.data_loader = data_loader
+        self.stores = stores
+        self.families = families
+        self.device = device
+
+    def run(self) -> None:
+        """Generate all analysis plots and log them to the active MLflow run."""
+        predictions, targets = self._collect_predictions()
+        self._log_figure(
+            plot_scatter_pred_vs_actual(predictions, targets),
+            "analysis/scatter_pred_vs_actual",
+        )
+        self._log_figure(
+            plot_error_distribution(predictions, targets),
+            "analysis/error_distribution",
+        )
+        rmsle_grid = self._per_series_rmsle(predictions, targets)
+        self._log_figure(
+            plot_metric_grid(rmsle_grid, self.stores, self.families, title="RMSLE"),
+            "analysis/rmsle_heatmap",
+        )
+        self._log_series_plots(predictions[0], targets[0])
+
+    @torch.inference_mode()
+    def _collect_predictions(self) -> tuple[Tensor, Tensor]:
+        self.model.eval()
+        all_predictions: list[Tensor] = []
+        all_targets: list[Tensor] = []
+        for batch_X, batch_y in self.data_loader:
+            pred = self.model(batch_X.to(self.device))
+            all_predictions.append(pred.cpu())
+            all_targets.append(batch_y.cpu())
+        return torch.cat(all_predictions), torch.cat(all_targets)
+
+    @staticmethod
+    def _per_series_rmsle(predictions: Tensor, targets: Tensor) -> Tensor:
+        """Compute RMSLE per (store, family) averaged over all windows and time steps.
+
+        Args:
+            predictions: shape [N, output_lags, n_stores, n_families].
+            targets: same shape as predictions.
+
+        Returns:
+            Tensor of shape [n_stores, n_families].
+        """
+        squared_log_errors = (torch.log1p(predictions) - torch.log1p(targets)).pow(2)
+        return squared_log_errors.mean(dim=(0, 1)).sqrt()
+
+    def _log_series_plots(self, predictions: Tensor, targets: Tensor) -> None:
+        """Log one plot_series figure per family (all stores overlaid) for a single val window.
+
+        Args:
+            predictions: shape [output_lags, n_stores, n_families] — first val sample.
+            targets: same shape as predictions.
+        """
+        store_nbrs = list(self.stores.index)
+        for family_name in self.families:
+            slug = family_name.replace("/", "_").replace(",", "_").replace(" ", "_")
+            fig = plot_series(
+                targets=targets,
+                stores=self.stores,
+                families=self.families,
+                store_nbr=store_nbrs,
+                family=family_name,
+                predictions=predictions,
+                title=f"{family_name} — all stores (first val window)",
+            )
+            self._log_figure(fig, f"analysis/series/{slug}")
+
+    @staticmethod
+    def _log_figure(fig: go.Figure, artifact_path: str) -> None:
+        """Write the figure as both HTML and PNG, log both to MLflow.
+
+        Args:
+            artifact_path: path without extension; both .html and .png are written
+                under the same MLflow artifact directory.
+        """
+        artifact_dir = str(Path(artifact_path).parent)
+        stem = Path(artifact_path).name
+        with tempfile.TemporaryDirectory() as tmp:
+            html_path = Path(tmp) / f"{stem}.html"
+            png_path = Path(tmp) / f"{stem}.png"
+            fig.write_html(str(html_path))
+            fig.write_image(str(png_path), format="png")
+            mlflow.log_artifact(str(html_path), artifact_path=artifact_dir)
+            mlflow.log_artifact(str(png_path), artifact_path=artifact_dir)
