@@ -400,18 +400,9 @@ class StoreSalesAnalyzer:
 
     @staticmethod
     def _log_figure(fig: go.Figure, artifact_path: str) -> None:
-        """Write the figure as both HTML and PNG, log both to MLflow.
-
-        Args:
-            artifact_path: path without extension; both .html and .png are written
-                under the same MLflow artifact directory.
-        """
         artifact_dir = str(Path(artifact_path).parent)
         stem = Path(artifact_path).name
         with tempfile.TemporaryDirectory() as tmp:
             html_path = Path(tmp) / f"{stem}.html"
-            png_path = Path(tmp) / f"{stem}.png"
             fig.write_html(str(html_path))
-            fig.write_image(str(png_path), format="png")
             mlflow.log_artifact(str(html_path), artifact_path=artifact_dir)
-            mlflow.log_artifact(str(png_path), artifact_path=artifact_dir)
