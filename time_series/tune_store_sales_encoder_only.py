@@ -25,13 +25,10 @@ def build_config(trial: optuna.Trial) -> dict:
     """Sample a hyperparameter configuration from the Optuna trial.
 
     Core architecture (pooling=all, nhead=2, batch=64) is fixed from the prior
-    sweep. This sweep adds input_mlp_depth and output_mlp_depth to test whether
-    nonlinear projections improve over the default single linear layer (depth=0).
-    MLP hidden width is fixed at 256; depth=0 renders it irrelevant.
+    sweep. Only lr, num_layers, and d_model_per_head remain free.
 
     Returns:
-        Dict with keys lr, d_model, nhead, num_layers, batch_size, pooling_mode,
-        input_mlp_depth, output_mlp_depth.
+        Dict with keys: lr, d_model, nhead, num_layers, batch_size, pooling_mode.
     """
     d_model_per_head = trial.suggest_categorical("d_model_per_head", [32, 64])
     return {
@@ -41,8 +38,6 @@ def build_config(trial: optuna.Trial) -> dict:
         "num_layers": trial.suggest_int("num_layers", 2, 4),
         "batch_size": 64,
         "pooling_mode": PoolingMode.ALL,
-        "input_mlp_depth": trial.suggest_categorical("input_mlp_depth", [0, 1, 2]),
-        "output_mlp_depth": trial.suggest_categorical("output_mlp_depth", [0, 1, 2]),
     }
 
 
@@ -72,8 +67,6 @@ def objective(
                 "num_layers": config["num_layers"],
                 "batch_size": config["batch_size"],
                 "pooling_mode": str(config["pooling_mode"]),
-                "input_mlp_depth": config["input_mlp_depth"],
-                "output_mlp_depth": config["output_mlp_depth"],
             }
         )
         val_loss, *_ = train_and_eval(
