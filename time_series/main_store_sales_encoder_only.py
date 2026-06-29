@@ -13,11 +13,11 @@ import argparse
 import enum
 from collections import OrderedDict
 
+import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import GetLastIndex, PositionalEncoding
@@ -120,6 +120,77 @@ class StoreSalesEncoderOnly(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+
+
+def train_and_eval(
+    config: dict,
+    store_data: StoreData,
+    device: torch.device,
+    epochs: int,
+    split: float = 0.9,
+    save_every: int | None = None,
+    save_checkpoints: bool = True,
+    log_metrics: bool = True,
+) -> tuple[float, StoreSalesEncoderOnly, DataLoader[Tensor]]:
+    """Build loaders and model from config, train, return results.
+
+    Must be called inside an active mlflow.start_run() context — Trainer
+    logs metrics and checkpoints to whatever run is currently active.
+
+    Args:
+        config: keys lr (float), d_model (int), nhead (int), num_layers (int),
+                batch_size (int), pooling_mode (PoolingMode).
+        store_data: pre-loaded dataset; shared to avoid redundant CSV I/O.
+        device: torch device.
+        epochs: number of training epochs.
+        split: fraction used for training; must be in (0, 1).
+        save_every: checkpoint every N epochs.
+        save_checkpoints: if False, skips all checkpoint writes. Set False during hyperparameter search.
+        log_metrics: if False, skips all mlflow.log_metrics and mlflow.set_tag calls. Set False during hyperparameter search.
+
+    Returns:
+        Tuple of (best_val_loss, trained_model, val_loader).
+    """
+    if not (0.0 < split < 1.0):
+        raise ValueError(f"split must be in (0, 1), got {split}")
+    split_loc = int(len(store_data) * split)
+    train_loader = DataLoader[Tensor](
+        Subset(store_data, range(0, split_loc)),
+        batch_size=config["batch_size"],
+        shuffle=True,
+    )
+    val_loader = DataLoader[Tensor](
+        Subset(store_data, range(split_loc, len(store_data))),
+        batch_size=config["batch_size"],
+    )
+
+    model = StoreSalesEncoderOnly(
+        n_stores=store_data.stores.shape[0],
+        n_families=store_data.families.size,
+        n_output_steps=store_data.output_lags,
+        d_model=config["d_model"],
+        nhead=config["nhead"],
+        num_layers=config["num_layers"],
+        pooling_mode=config["pooling_mode"],
+    )
+
+    trainer = Trainer(
+        model=model,
+        device=device,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        learning_rate=config["lr"],
+        loss_func=MSLELoss(),
+        save_checkpoints=save_checkpoints,
+        log_metrics=log_metrics,
+    )
+    best_val_loss = trainer.train(epochs, save_every_n_epochs=save_every)
+    return best_val_loss, model, val_loader
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -167,26 +238,15 @@ def main() -> None:
     )
 
     store_data = StoreData(dtype=torch.float32)
-    n_stores = store_data.stores.shape[0]
-    n_families = store_data.families.size
 
-    split_loc = int(len(store_data) * args.split)
-    train_data = Subset(store_data, range(0, split_loc))
-    val_data = Subset(store_data, range(split_loc, len(store_data)))
-    train_loader = DataLoader[Tensor](
-        train_data, batch_size=args.batch_size, shuffle=True
-    )
-    val_loader = DataLoader[Tensor](val_data, batch_size=args.batch_size)
-
-    model = StoreSalesEncoderOnly(
-        n_stores=n_stores,
-        n_families=n_families,
-        n_output_steps=store_data.output_lags,
-        d_model=args.d_model,
-        nhead=args.nhead,
-        num_layers=args.num_layers,
-        pooling_mode=args.pooling_mode,
-    )
+    config = {
+        "lr": args.lr,
+        "d_model": args.d_model,
+        "nhead": args.nhead,
+        "num_layers": args.num_layers,
+        "batch_size": args.batch_size,
+        "pooling_mode": args.pooling_mode,
+    }
 
     mlflow.pytorch.autolog()
     mlflow.set_tracking_uri(TRACKING_URI)
@@ -221,15 +281,14 @@ def main() -> None:
                 "nhead": args.nhead,
             }
         )
-        trainer = Trainer(
-            model=model,
+        _val_loss, model, val_loader = train_and_eval(
+            config=config,
+            store_data=store_data,
             device=device,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            learning_rate=args.lr,
-            loss_func=MSLELoss(),
+            epochs=args.epochs,
+            split=args.split,
+            save_every=args.save_every,
         )
-        trainer.train(args.epochs, save_every_n_epochs=args.save_every)
         StoreSalesAnalyzer(
             model=model,
             data_loader=val_loader,

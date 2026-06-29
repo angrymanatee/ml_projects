@@ -6,74 +6,9 @@ import torch
 
 from time_series.store_sales import MSLELoss, StoreData
 
-# ---------------------------------------------------------------------------
-# Shared synthetic fixtures
-# ---------------------------------------------------------------------------
-
 DATES = pd.to_datetime(["2013-01-01", "2013-01-02", "2013-01-03"])
 STORE_NBRS = [1, 2]
 FAMILIES = ["AUTOMOTIVE", "GROCERY I"]
-
-
-@pytest.fixture(scope="module")
-def mock_train() -> pd.DataFrame:
-    """Minimal train DataFrame: 3 dates × 2 stores × 2 families."""
-    rows = [
-        (date, store, family, float(i), 0)
-        for i, (date, store, family) in enumerate(
-            (d, s, f) for d in DATES for s in STORE_NBRS for f in FAMILIES
-        )
-    ]
-    df = pd.DataFrame(
-        rows, columns=pd.Index(["date", "store_nbr", "family", "sales", "onpromotion"])
-    )
-    return df.set_index(pd.DatetimeIndex(df.pop("date"), name="date"))
-
-
-@pytest.fixture(scope="module")
-def mock_stores() -> pd.DataFrame:
-    return pd.DataFrame(
-        {"city": ["Quito", "Guayaquil"], "type": ["D", "D"]},
-        index=pd.Index(STORE_NBRS, name="store_nbr"),
-    )
-
-
-@pytest.fixture(scope="module")
-def mock_data_dir(
-    tmp_path_factory: pytest.TempPathFactory,
-    mock_train: pd.DataFrame,
-    mock_stores: pd.DataFrame,
-) -> Path:
-    """Temp directory populated with all CSVs StoreData.__init__ reads."""
-    d = tmp_path_factory.mktemp("store_sales")
-
-    mock_train.reset_index().to_csv(d / "train.csv", index=False)
-
-    # test.csv shares the same schema as train
-    mock_train.reset_index().to_csv(d / "test.csv", index=False)
-
-    pd.DataFrame({"id": [0], "sales": [0.0]}).to_csv(
-        d / "sample_submission.csv", index=False
-    )
-
-    mock_stores.reset_index().to_csv(d / "stores.csv", index=False)
-
-    pd.DataFrame({"date": ["2013-01-01"], "dcoilwtico": [93.14]}).to_csv(
-        d / "oil.csv", index=False
-    )
-
-    pd.DataFrame(
-        {
-            "date": ["2013-01-01"],
-            "type": ["Holiday"],
-            "locale": ["National"],
-            "locale_name": ["Ecuador"],
-            "description": ["New Year"],
-            "transferred": [False],
-        }
-    ).to_csv(d / "holidays_events.csv", index=False)
-
-    return d
 
 
 # ---------------------------------------------------------------------------

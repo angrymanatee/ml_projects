@@ -3,6 +3,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import mlflow
 import pandas as pd
 import torch
 from torch import Tensor, nn
@@ -10,7 +11,6 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import mlflow
 from common.paths import get_data_dir
 
 
@@ -156,6 +156,8 @@ class Trainer:
         val_loader: DataLoader[Tensor],
         learning_rate: float = 1e-3,
         loss_func: nn.Module | None = None,
+        save_checkpoints: bool = True,
+        log_metrics: bool = True,
     ) -> None:
         self.device: torch.device = device
         self.model = model.to(device)
@@ -163,14 +165,19 @@ class Trainer:
         self.loss_func = loss_func or MSLELoss()
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.save_checkpoints = save_checkpoints
+        self.log_metrics = log_metrics
 
-    def train(self, epochs: int, save_every_n_epochs: int | None = None) -> None:
+    def train(self, epochs: int, save_every_n_epochs: int | None = None) -> float:
         """Run the full training loop for `epochs` epochs.
 
         Args:
             epochs: total number of passes over the training set.
             save_every_n_epochs: if set, save a periodic checkpoint every N epochs
                 in addition to the best-val checkpoint saved automatically.
+
+        Returns:
+            Best validation loss observed across all epochs.
         """
         progress_bar = tqdm(range(epochs))
         digits = math.ceil(math.log10(epochs))
@@ -184,13 +191,20 @@ class Trainer:
             val_loss = self.val_loop(epoch_idx).item()
             progress_bar.set_description(f"T: {train_loss:.4f} | V: {val_loss:.4f}")
             if val_loss < best_val_loss:
-                progress_bar.set_description("saving best...")
-                self._checkpoint("best_model")
                 best_val_loss = val_loss
-                mlflow.set_tag("best_epoch", epoch_idx)
-            if save_every_n_epochs and epoch_idx % save_every_n_epochs == 0:
+                if self.save_checkpoints:
+                    progress_bar.set_description("saving best...")
+                    self._checkpoint("best_model")
+                if self.log_metrics:
+                    mlflow.set_tag("best_epoch", epoch_idx)
+            if (
+                save_every_n_epochs
+                and epoch_idx % save_every_n_epochs == 0
+                and self.save_checkpoints
+            ):
                 progress_bar.set_description("saving periodic...")
                 self._checkpoint(f"epoch_{epoch_idx:0{digits}}")
+        return best_val_loss
 
     def train_loop(self, epoch_idx: int) -> Tensor:
         """One pass over the training set; returns the loss of the last batch."""
@@ -212,7 +226,8 @@ class Trainer:
         mem = self._allocated_memory_gb()
         if mem is not None:
             metrics["mem_allocated_gb"] = mem
-        mlflow.log_metrics(metrics, step=epoch_idx)
+        if self.log_metrics:
+            mlflow.log_metrics(metrics, step=epoch_idx)
         return loss
 
     @torch.inference_mode()
@@ -224,7 +239,8 @@ class Trainer:
             loss += self._run_loss(batch_X.to(self.device), batch_y.to(self.device))
             n_batches += 1
         loss /= n_batches
-        mlflow.log_metrics({"val_loss": loss.item()}, step=epoch_idx)
+        if self.log_metrics:
+            mlflow.log_metrics({"val_loss": loss.item()}, step=epoch_idx)
         return loss
 
     def _run_loss(self, batch_X: Tensor, batch_y: Tensor) -> Tensor:

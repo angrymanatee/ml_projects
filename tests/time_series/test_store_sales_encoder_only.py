@@ -1,11 +1,20 @@
-"""Tests for StoreSalesEncoderOnly and PoolingMode."""
+"""Tests for StoreSalesEncoderOnly, PoolingMode, and train_and_eval."""
+
+import math
+import unittest.mock
+from pathlib import Path
 
 import pytest
 import torch
 from torch import nn
 
 from common.modules import GetLastIndex
-from time_series.main_store_sales_encoder_only import PoolingMode, StoreSalesEncoderOnly
+from time_series.main_store_sales_encoder_only import (
+    PoolingMode,
+    StoreSalesEncoderOnly,
+    train_and_eval,
+)
+from time_series.store_sales import StoreData, Trainer
 
 N_STORES = 3
 N_FAMILIES = 4
@@ -124,3 +133,46 @@ def test_different_inputs_produce_different_outputs(
     x1 = _rand_input()
     x2 = _rand_input()
     assert not torch.equal(model_last(x1), model_last(x2))
+
+
+# ---------------------------------------------------------------------------
+# train_and_eval
+# ---------------------------------------------------------------------------
+
+
+def test_train_and_eval_returns_finite_loss(mock_data_dir: Path) -> None:
+    store_data = StoreData(
+        window_lags=1, output_lags=1, data_dir=mock_data_dir, dtype=torch.float32
+    )
+    config = {
+        "lr": 1e-3,
+        "d_model": 4,
+        "nhead": 1,
+        "num_layers": 1,
+        "batch_size": 1,
+        "pooling_mode": PoolingMode.LAST,
+    }
+    fixed_loss = torch.tensor(0.5)
+    # DataLoader is mocked because any split of the 1-sample mock dataset produces
+    # an empty Subset, which causes DataLoader to raise before mocked methods are reached.
+    with (
+        unittest.mock.patch("mlflow.log_metrics"),
+        unittest.mock.patch("mlflow.set_tag"),
+        unittest.mock.patch("mlflow.log_artifact"),
+        unittest.mock.patch("mlflow.pytorch.autolog"),
+        unittest.mock.patch("time_series.main_store_sales_encoder_only.DataLoader"),
+        unittest.mock.patch.object(Trainer, "train_loop", return_value=fixed_loss),
+        unittest.mock.patch.object(Trainer, "val_loop", return_value=fixed_loss),
+        unittest.mock.patch.object(Trainer, "_checkpoint"),
+    ):
+        val_loss, model, val_loader = train_and_eval(
+            config=config,
+            store_data=store_data,
+            device=torch.device("cpu"),
+            epochs=1,
+            split=0.5,
+        )
+
+    assert isinstance(val_loss, float)
+    assert math.isfinite(val_loss)
+    assert val_loss >= 0.0
