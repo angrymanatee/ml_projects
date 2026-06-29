@@ -65,9 +65,9 @@ class StoreSalesEncoderOnly(nn.Module):
         n_stores: int,
         n_families: int,
         n_output_steps: int,
-        d_model: int = 128,
-        nhead: int = 8,
-        num_layers: int = 6,
+        d_model: int = 64,
+        nhead: int = 2,
+        num_layers: int = 2,
         max_seq_length: int = 512,
         pooling_mode: PoolingMode = PoolingMode.ALL,
         dim_feedforward: int = 256,
@@ -221,7 +221,7 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="save a checkpoint every N epochs (default: 50)",
     )
-    parser.add_argument("--lr", type=float, default=1.71e-3, metavar="LR")
+    parser.add_argument("--lr", type=float, default=1.75e-3, metavar="LR")
     parser.add_argument(
         "--split",
         type=float,
