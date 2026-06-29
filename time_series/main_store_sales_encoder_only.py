@@ -1,26 +1,32 @@
 """Train an encoder-only Transformer on the Kaggle Store Sales dataset.
 
-Architecture: linear projection → sinusoidal PE → TransformerEncoder → flatten → linear head.
+Architecture: flatten → input MLP → sinusoidal PE → TransformerEncoder → pool → output MLP → unflatten → ReLU.
 No causal masking; the encoder attends over the full input window before projecting to the
-output horizon. Loss is RMSLE (via MSLELoss), logged to MLflow.
+output horizon. Input and output MLPs default to depth=0 (single linear layer), reproducing
+the original architecture. Loss is RMSLE (via MSLELoss), logged to MLflow.
 
 Run with:
     uv run python -m time_series.main_store_sales_encoder_only
     uv run python -m time_series.main_store_sales_encoder_only --epochs 100 --lr 3e-4 --d-model 256
+    uv run python -m time_series.main_store_sales_encoder_only --input-mlp-depth 2 --output-mlp-depth 2
 """
 
 import argparse
 import enum
 from collections import OrderedDict
 
-import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from common.modules import GetLastIndex, PositionalEncoding
+from common.modules import (
+    GetLastIndex,
+    LazyMLP,
+    PositionalEncoding,
+)
 from time_series.store_sales import MSLELoss, StoreData, Trainer
 from time_series.store_sales_viz import StoreSalesAnalyzer
 
@@ -66,7 +72,11 @@ class StoreSalesEncoderOnly(nn.Module):
         nhead: int = 8,
         num_layers: int = 6,
         max_seq_length: int = 512,
-        pooling_mode: PoolingMode = PoolingMode.LAST,
+        pooling_mode: PoolingMode = PoolingMode.ALL,
+        input_mlp_depth: int = 0,
+        input_mlp_features: int = 256,
+        output_mlp_depth: int = 0,
+        output_mlp_features: int = 256,
     ) -> None:
         """Build the encoder-only model.
 
@@ -78,6 +88,14 @@ class StoreSalesEncoderOnly(nn.Module):
             nhead: Number of attention heads.
             num_layers: Number of stacked TransformerEncoderLayer blocks.
             max_seq_length: Upper bound on input sequence length passed to PositionalEncoding.
+            pooling_mode: How to collapse the sequence dimension after the encoder.
+                ALL flattens all timestep embeddings; LAST takes only the final one.
+            input_mlp_depth: Number of hidden layers in the input projection MLP.
+                0 means a single linear layer (no hidden layers).
+            input_mlp_features: Hidden layer width for the input MLP (ignored when depth=0).
+            output_mlp_depth: Number of hidden layers in the output projection MLP.
+                0 means a single linear layer (no hidden layers).
+            output_mlp_features: Hidden layer width for the output MLP (ignored when depth=0).
         """
         super().__init__()
         self.n_stores = n_stores
@@ -86,7 +104,10 @@ class StoreSalesEncoderOnly(nn.Module):
         models = OrderedDict[str, nn.Module](
             [
                 ("input_flatten", nn.Flatten(-2)),
-                ("input_lin", nn.Linear(n_stores * n_families, d_model)),
+                (
+                    "input_mlp",
+                    LazyMLP(d_model, input_mlp_depth, input_mlp_features),
+                ),
                 # Normalization?
                 ("pos_enc", PositionalEncoding(d_model, max_length=max_seq_length)),
                 (
@@ -97,7 +118,14 @@ class StoreSalesEncoderOnly(nn.Module):
                     ),
                 ),
                 ("pooling", PoolingMode.get_module(pooling_mode)),
-                ("output_lin", nn.LazyLinear(n_stores * n_families * n_output_steps)),
+                (
+                    "output_lin",
+                    LazyMLP(
+                        n_stores * n_families * n_output_steps,
+                        output_mlp_depth,
+                        output_mlp_features,
+                    ),
+                ),
                 (
                     "output_unflatten",
                     nn.Unflatten(-1, (n_output_steps, n_stores, n_families)),
@@ -141,7 +169,9 @@ def train_and_eval(
 
     Args:
         config: keys lr (float), d_model (int), nhead (int), num_layers (int),
-                batch_size (int), pooling_mode (PoolingMode).
+                batch_size (int), pooling_mode (PoolingMode),
+                input_mlp_depth (int, default 0), input_mlp_features (int, default 256),
+                output_mlp_depth (int, default 0), output_mlp_features (int, default 256).
         store_data: pre-loaded dataset; shared to avoid redundant CSV I/O.
         device: torch device.
         epochs: number of training epochs.
@@ -174,6 +204,10 @@ def train_and_eval(
         nhead=config["nhead"],
         num_layers=config["num_layers"],
         pooling_mode=config["pooling_mode"],
+        input_mlp_depth=config.get("input_mlp_depth", 0),
+        input_mlp_features=config.get("input_mlp_features", 256),
+        output_mlp_depth=config.get("output_mlp_depth", 0),
+        output_mlp_features=config.get("output_mlp_features", 256),
     )
 
     trainer = Trainer(
@@ -224,6 +258,30 @@ def parse_args() -> argparse.Namespace:
         choices=[x.value for x in PoolingMode],
         default=PoolingMode.ALL,
     )
+    parser.add_argument(
+        "--input-mlp-depth",
+        type=int,
+        default=0,
+        help="hidden layers in input projection MLP (default: 0 = linear)",
+    )
+    parser.add_argument(
+        "--input-mlp-features",
+        type=int,
+        default=256,
+        help="hidden layer width for input MLP (default: 256)",
+    )
+    parser.add_argument(
+        "--output-mlp-depth",
+        type=int,
+        default=0,
+        help="hidden layers in output projection MLP (default: 0 = linear)",
+    )
+    parser.add_argument(
+        "--output-mlp-features",
+        type=int,
+        default=256,
+        help="hidden layer width for output MLP (default: 256)",
+    )
     return parser.parse_args()
 
 
@@ -246,6 +304,10 @@ def main() -> None:
         "num_layers": args.num_layers,
         "batch_size": args.batch_size,
         "pooling_mode": args.pooling_mode,
+        "input_mlp_depth": args.input_mlp_depth,
+        "input_mlp_features": args.input_mlp_features,
+        "output_mlp_depth": args.output_mlp_depth,
+        "output_mlp_features": args.output_mlp_features,
     }
 
     mlflow.pytorch.autolog()
@@ -279,6 +341,11 @@ def main() -> None:
                 "batch_size": args.batch_size,
                 "d_model": args.d_model,
                 "nhead": args.nhead,
+                "num_layers": args.num_layers,
+                "input_mlp_depth": args.input_mlp_depth,
+                "input_mlp_features": args.input_mlp_features,
+                "output_mlp_depth": args.output_mlp_depth,
+                "output_mlp_features": args.output_mlp_features,
             }
         )
         _val_loss, model, val_loader = train_and_eval(

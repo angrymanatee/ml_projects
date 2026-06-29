@@ -1,6 +1,7 @@
 """Personal Modules and utilities."""
 
 import math
+from collections import OrderedDict
 
 import torch
 from torch import Tensor, nn
@@ -52,6 +53,34 @@ class PositionalEncoding(nn.Module):
             Tensor of same shape as input_tensor with positional encoding summed in.
         """
         return input_tensor + self.positional_encoding[:, : input_tensor.shape[1], :]
+
+
+class LazyMLP(nn.Module):
+    """MLP with lazy input inference and configurable depth.
+
+    With depth=0, reduces to a single linear layer. With depth>0, inserts
+    that many hidden layers of width features_per_layer before the output.
+    Uses LazyLinear so the input dimension is inferred on the first forward pass.
+    """
+
+    def __init__(
+        self,
+        output_features: int = 16,
+        depth: int = 0,
+        features_per_layer: int = 16,
+        activation: nn.Module | None = None,
+    ) -> None:
+        super().__init__()
+        activation = activation or nn.ReLU()
+        layers = OrderedDict[str, nn.Module]()
+        for layer_i in range(depth):
+            layers[f"linear_{layer_i}"] = nn.LazyLinear(features_per_layer)
+            layers[f"activ_{layer_i}"] = activation
+        layers["linear_output"] = nn.LazyLinear(output_features)
+        self.sequence = nn.Sequential(layers)
+
+    def forward(self, input: Tensor) -> Tensor:
+        return self.sequence(input)
 
 
 class GetLastIndex(nn.Module):
