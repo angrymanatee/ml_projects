@@ -11,10 +11,10 @@ Run with:
 
 import argparse
 
+import mlflow
 import optuna
 import torch
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
@@ -25,10 +25,10 @@ def build_config(trial: optuna.Trial) -> dict:
     """Sample a hyperparameter configuration from the Optuna trial.
 
     Core architecture (pooling=all, nhead=2, batch=64) is fixed from the prior
-    sweep. Only lr, num_layers, and d_model_per_head remain free.
+    sweep. Free parameters: lr, num_layers, d_model_per_head, dim_feedforward.
 
     Returns:
-        Dict with keys: lr, d_model, nhead, num_layers, batch_size, pooling_mode.
+        Dict with keys: lr, d_model, nhead, num_layers, batch_size, pooling_mode, dim_feedforward.
     """
     d_model_per_head = trial.suggest_categorical("d_model_per_head", [32, 64])
     return {
@@ -38,6 +38,9 @@ def build_config(trial: optuna.Trial) -> dict:
         "num_layers": trial.suggest_int("num_layers", 2, 4),
         "batch_size": 64,
         "pooling_mode": PoolingMode.ALL,
+        "dim_feedforward": trial.suggest_categorical(
+            "dim_feedforward", [64, 128, 256, 512]
+        ),
     }
 
 
@@ -67,6 +70,7 @@ def objective(
                 "num_layers": config["num_layers"],
                 "batch_size": config["batch_size"],
                 "pooling_mode": str(config["pooling_mode"]),
+                "dim_feedforward": config["dim_feedforward"],
             }
         )
         val_loss, *_ = train_and_eval(

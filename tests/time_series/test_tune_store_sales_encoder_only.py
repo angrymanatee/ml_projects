@@ -10,7 +10,7 @@ def _make_mock_trial() -> unittest.mock.MagicMock:
     mock_trial = unittest.mock.MagicMock()
 
     def categorical_side_effect(name: str, choices: list) -> object:
-        return {"d_model_per_head": 32}[name]
+        return {"d_model_per_head": 32, "dim_feedforward": 128}[name]
 
     mock_trial.suggest_categorical.side_effect = categorical_side_effect
     mock_trial.suggest_float.return_value = 1.5e-3
@@ -32,6 +32,7 @@ def test_build_config_has_required_keys() -> None:
         "num_layers",
         "batch_size",
         "pooling_mode",
+        "dim_feedforward",
     } <= config.keys()
 
 

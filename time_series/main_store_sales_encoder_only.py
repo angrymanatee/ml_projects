@@ -13,11 +13,11 @@ import argparse
 import enum
 from collections import OrderedDict
 
+import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import (
@@ -70,6 +70,7 @@ class StoreSalesEncoderOnly(nn.Module):
         num_layers: int = 6,
         max_seq_length: int = 512,
         pooling_mode: PoolingMode = PoolingMode.ALL,
+        dim_feedforward: int = 256,
     ) -> None:
         """Build the encoder-only model.
 
@@ -83,6 +84,8 @@ class StoreSalesEncoderOnly(nn.Module):
             max_seq_length: Upper bound on input sequence length passed to PositionalEncoding.
             pooling_mode: How to collapse the sequence dimension after the encoder.
                 ALL flattens all timestep embeddings; LAST takes only the final one.
+            dim_feedforward: Width of the FFN sublayer inside each TransformerEncoderLayer.
+                PyTorch default is 2048; for d_model=64 something in [128, 512] is typical.
         """
         super().__init__()
         self.n_stores = n_stores
@@ -97,7 +100,12 @@ class StoreSalesEncoderOnly(nn.Module):
                 (
                     "encoder",
                     nn.TransformerEncoder(
-                        nn.TransformerEncoderLayer(d_model, nhead, batch_first=True),
+                        nn.TransformerEncoderLayer(
+                            d_model,
+                            nhead,
+                            dim_feedforward=dim_feedforward,
+                            batch_first=True,
+                        ),
                         num_layers=num_layers,
                     ),
                 ),
@@ -146,7 +154,8 @@ def train_and_eval(
 
     Args:
         config: keys lr (float), d_model (int), nhead (int), num_layers (int),
-                batch_size (int), pooling_mode (PoolingMode).
+                batch_size (int), pooling_mode (PoolingMode),
+                dim_feedforward (int, default 256).
         store_data: pre-loaded dataset; shared to avoid redundant CSV I/O.
         device: torch device.
         epochs: number of training epochs.
@@ -179,6 +188,7 @@ def train_and_eval(
         nhead=config["nhead"],
         num_layers=config["num_layers"],
         pooling_mode=config["pooling_mode"],
+        dim_feedforward=config.get("dim_feedforward", 256),
     )
 
     trainer = Trainer(
@@ -230,28 +240,10 @@ def parse_args() -> argparse.Namespace:
         default=PoolingMode.ALL,
     )
     parser.add_argument(
-        "--input-mlp-depth",
-        type=int,
-        default=0,
-        help="hidden layers in input projection MLP (default: 0 = linear)",
-    )
-    parser.add_argument(
-        "--input-mlp-features",
+        "--dim-feedforward",
         type=int,
         default=256,
-        help="hidden layer width for input MLP (default: 256)",
-    )
-    parser.add_argument(
-        "--output-mlp-depth",
-        type=int,
-        default=0,
-        help="hidden layers in output projection MLP (default: 0 = linear)",
-    )
-    parser.add_argument(
-        "--output-mlp-features",
-        type=int,
-        default=256,
-        help="hidden layer width for output MLP (default: 256)",
+        help="FFN width inside each TransformerEncoderLayer (default: 256)",
     )
     return parser.parse_args()
 
@@ -275,6 +267,7 @@ def main() -> None:
         "num_layers": args.num_layers,
         "batch_size": args.batch_size,
         "pooling_mode": args.pooling_mode,
+        "dim_feedforward": args.dim_feedforward,
     }
 
     mlflow.pytorch.autolog()
@@ -309,6 +302,7 @@ def main() -> None:
                 "d_model": args.d_model,
                 "nhead": args.nhead,
                 "num_layers": args.num_layers,
+                "dim_feedforward": args.dim_feedforward,
             }
         )
         _val_loss, model, val_loader = train_and_eval(
