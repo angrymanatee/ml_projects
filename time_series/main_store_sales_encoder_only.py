@@ -206,7 +206,7 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="save a checkpoint every N epochs (default: 50)",
     )
-    parser.add_argument("--lr", type=float, default=1e-3, metavar="LR")
+    parser.add_argument("--lr", type=float, default=1.71e-3, metavar="LR")
     parser.add_argument(
         "--split",
         type=float,
@@ -214,15 +214,15 @@ def parse_args() -> argparse.Namespace:
         metavar="FRAC",
         help="train/val split fraction (default: 0.9)",
     )
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--d-model", type=int, default=128)
-    parser.add_argument("--nhead", type=int, default=4)
-    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--d-model", type=int, default=64)
+    parser.add_argument("--nhead", type=int, default=2)
+    parser.add_argument("--num-layers", type=int, default=2)
     parser.add_argument(
         "--pooling-mode",
         type=PoolingMode.parse,
         choices=[x.value for x in PoolingMode],
-        default=PoolingMode.LAST,
+        default=PoolingMode.ALL,
     )
     return parser.parse_args()
 
