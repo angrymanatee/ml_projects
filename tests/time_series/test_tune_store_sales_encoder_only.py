@@ -10,7 +10,11 @@ def _make_mock_trial() -> unittest.mock.MagicMock:
     mock_trial = unittest.mock.MagicMock()
 
     def categorical_side_effect(name: str, choices: list) -> object:
-        return {"d_model_per_head": 32}[name]
+        return {
+            "d_model_per_head": 32,
+            "input_mlp_depth": 1,
+            "output_mlp_depth": 0,
+        }[name]
 
     mock_trial.suggest_categorical.side_effect = categorical_side_effect
     mock_trial.suggest_float.return_value = 1.5e-3
