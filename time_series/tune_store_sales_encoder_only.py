@@ -24,22 +24,20 @@ from time_series.store_sales import StoreData
 def build_config(trial: optuna.Trial) -> dict:
     """Sample a hyperparameter configuration from the Optuna trial.
 
-    d_model is derived as nhead * d_model_per_head to guarantee divisibility.
+    Search space narrowed from prior run: pooling=all, nhead=2, batch=64 are
+    fixed; only lr, num_layers, and d_model_per_head remain free.
 
     Returns:
         Dict with keys: lr, d_model, nhead, num_layers, batch_size, pooling_mode.
     """
-    nhead = trial.suggest_categorical("nhead", [1, 2, 4, 8])
-    d_model_per_head = trial.suggest_categorical("d_model_per_head", [16, 32, 64])
+    d_model_per_head = trial.suggest_categorical("d_model_per_head", [32, 64])
     return {
-        "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
-        "d_model": nhead * d_model_per_head,
-        "nhead": nhead,
-        "num_layers": trial.suggest_int("num_layers", 1, 6),
-        "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
-        "pooling_mode": PoolingMode.parse(
-            trial.suggest_categorical("pooling_mode", ["last", "all"])
-        ),
+        "lr": trial.suggest_float("lr", 1e-3, 2e-3, log=True),
+        "d_model": 2 * d_model_per_head,
+        "nhead": 2,
+        "num_layers": trial.suggest_int("num_layers", 2, 4),
+        "batch_size": 64,
+        "pooling_mode": PoolingMode.ALL,
     }
 
 
