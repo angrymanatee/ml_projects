@@ -24,7 +24,13 @@ from common.modules import (
     GetLastIndex,
     PositionalEncoding,
 )
-from time_series.store_sales import STORE_FEATURE_COLS, MSLELoss, StoreData, Trainer
+from time_series.store_sales import (
+    HOLIDAY_FEATURE_COLS,
+    STORE_FEATURE_COLS,
+    MSLELoss,
+    StoreData,
+    Trainer,
+)
 from time_series.store_sales_viz import StoreSalesAnalyzer
 
 # ---------------------------------------------------------------------------
@@ -268,6 +274,17 @@ def parse_args() -> argparse.Namespace:
             f"(choices: {', '.join(STORE_FEATURE_COLS)})"
         ),
     )
+    parser.add_argument(
+        "--holiday-features",
+        nargs="*",
+        choices=list(HOLIDAY_FEATURE_COLS),
+        default=[],
+        metavar="FEAT",
+        help=(
+            f"holiday/event features to append as binary input channels "
+            f"(choices: {', '.join(HOLIDAY_FEATURE_COLS)})"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -286,6 +303,7 @@ def main() -> None:
         include_oil=args.oil,
         include_onpromotion=args.onpromotion,
         store_feature_cols=args.store_features,
+        holiday_features=args.holiday_features,
     )
 
     config = {
@@ -335,6 +353,9 @@ def main() -> None:
                 "include_onpromotion": args.onpromotion,
                 "store_features": ",".join(args.store_features)
                 if args.store_features
+                else "none",
+                "holiday_features": ",".join(args.holiday_features)
+                if args.holiday_features
                 else "none",
             }
         )

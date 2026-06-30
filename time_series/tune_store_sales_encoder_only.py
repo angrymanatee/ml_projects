@@ -18,7 +18,7 @@ import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
-from time_series.store_sales import STORE_FEATURE_COLS, StoreData
+from time_series.store_sales import HOLIDAY_FEATURE_COLS, STORE_FEATURE_COLS, StoreData
 
 
 def build_config(trial: optuna.Trial) -> dict:
@@ -92,6 +92,7 @@ def tune(
     split: float,
     study_name: str,
     store_feature_cols: list[str] | None = None,
+    holiday_features: list[str] | None = None,
 ) -> None:
     """Run the full Optuna study and log results to MLflow.
 
@@ -106,8 +107,14 @@ def tune(
         study_name: name passed to optuna.create_study and used as the MLflow parent run name.
         store_feature_cols: store metadata columns to include as input features.
             Passed through to StoreData unchanged.
+        holiday_features: holiday/event features to include as binary input channels.
+            Passed through to StoreData unchanged.
     """
-    store_data = StoreData(dtype=torch.float32, store_feature_cols=store_feature_cols)
+    store_data = StoreData(
+        dtype=torch.float32,
+        store_feature_cols=store_feature_cols,
+        holiday_features=holiday_features,
+    )
     device = (
         torch.device("mps")
         if torch.backends.mps.is_available()
@@ -136,6 +143,9 @@ def tune(
             "epochs_per_trial": str(epochs_per_trial),
             "store_features": ",".join(store_feature_cols)
             if store_feature_cols
+            else "none",
+            "holiday_features": ",".join(holiday_features)
+            if holiday_features
             else "none",
         },
     ):
@@ -174,6 +184,17 @@ def parse_args() -> argparse.Namespace:
             f"(choices: {', '.join(STORE_FEATURE_COLS)})"
         ),
     )
+    parser.add_argument(
+        "--holiday-features",
+        nargs="*",
+        choices=list(HOLIDAY_FEATURE_COLS),
+        default=[],
+        metavar="FEAT",
+        help=(
+            f"holiday/event features to append as binary input channels "
+            f"(choices: {', '.join(HOLIDAY_FEATURE_COLS)})"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -186,6 +207,7 @@ def main() -> None:
         split=args.split,
         study_name=args.study_name,
         store_feature_cols=args.store_features,
+        holiday_features=args.holiday_features,
     )
 
 

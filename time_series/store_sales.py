@@ -39,6 +39,16 @@ def _date_index(df: pd.DataFrame) -> pd.DataFrame:
 
 STORE_FEATURE_COLS = ("city", "state", "type", "cluster")
 
+HOLIDAY_FEATURE_COLS = (
+    "national_holiday",
+    "event",
+    "bridge",
+    "work_day",
+    "additional",
+    "regional_holiday",
+    "local_holiday",
+)
+
 
 class StoreData(Dataset):
     """Store sales dataset for the Kaggle Store Sales forecasting competition.
@@ -74,6 +84,12 @@ class StoreData(Dataset):
             or None if no store features were requested.
         store_feature_encoders: dict mapping column name -> sorted unique values
             used for label encoding (categorical columns only).
+        holiday_tensor: float32 Tensor of shape [T, n_stores, n_holiday_features],
+            or None if no holiday features were requested. National-scope features
+            (national_holiday, event, bridge, work_day, additional) are broadcast
+            across all stores. Per-store features (regional_holiday, local_holiday)
+            are matched by state and city respectively.
+        n_holiday_features: number of holiday feature channels (0 when disabled).
     """
 
     def __init__(
@@ -90,6 +106,7 @@ class StoreData(Dataset):
         include_oil: bool = False,
         include_onpromotion: bool = False,
         store_feature_cols: list[str] | None = None,
+        holiday_features: list[str] | None = None,
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -121,6 +138,13 @@ class StoreData(Dataset):
                 to include as extra per-store input features appended along the
                 family dimension after date features. Categoricals are one-hot
                 encoded; "cluster" is passed through as a single numeric column.
+            holiday_features: subset of HOLIDAY_FEATURE_COLS to include as
+                additional binary input channels. National-scope features
+                (national_holiday, event, bridge, work_day, additional) are
+                broadcast across all 54 stores. Per-store features
+                (regional_holiday, local_holiday) are matched by store state
+                and city respectively. Transferred holidays are treated as
+                ordinary days; Transfer rows mark the actual celebration date.
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
@@ -169,6 +193,21 @@ class StoreData(Dataset):
             self._build_store_features(self.stores, requested_cols, dtype)
         )
 
+        requested_holiday_features = list(holiday_features) if holiday_features else []
+        invalid_holiday = set(requested_holiday_features) - set(HOLIDAY_FEATURE_COLS)
+        if invalid_holiday:
+            raise ValueError(
+                f"Unknown holiday feature(s): {invalid_holiday}. "
+                f"Valid options: {HOLIDAY_FEATURE_COLS}"
+            )
+        self.holiday_tensor: Tensor | None = self._setup_holiday_tensor(
+            self.holidays,
+            self.train,
+            self.stores,
+            requested_holiday_features,
+            dtype,
+        )
+
     @staticmethod
     def _build_store_features(
         stores: pd.DataFrame,
@@ -206,6 +245,109 @@ class StoreData(Dataset):
 
         arr = np.concatenate(blocks, axis=1)
         return torch.from_numpy(arr).to(dtype), encoders  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _setup_holiday_tensor(
+        holidays: pd.DataFrame,
+        train: pd.DataFrame,
+        stores: pd.DataFrame,
+        requested_features: list[str],
+        dtype: torch.dtype = torch.float32,
+    ) -> Tensor | None:
+        """Build a [T, n_stores, n_holiday_features] tensor of binary holiday indicators.
+
+        National-scope features are broadcast across all stores. Per-store features
+        (regional_holiday, local_holiday) match the store's state or city against
+        the holiday's locale_name. transferred=True rows are treated as ordinary days;
+        type=Transfer rows capture the actual rescheduled celebration date.
+
+        Args:
+            holidays: DataFrame indexed by date with columns type, locale,
+                locale_name, transferred.
+            train: training DataFrame indexed by date; used to derive T and date order.
+            stores: stores DataFrame indexed by store_nbr with city, state columns.
+            requested_features: ordered subset of HOLIDAY_FEATURE_COLS.
+
+        Returns:
+            Float32 Tensor of shape [T, n_stores, len(requested_features)], or None
+            when requested_features is empty.
+        """
+        if not requested_features:
+            return None
+
+        train_dates = train.index.unique().sort_values()
+        n_times = len(train_dates)
+        n_stores = stores.shape[0]
+        sorted_stores = stores.sort_index()
+
+        def _active_national_dates(holiday_type: str) -> set:
+            """Dates where a national-scope type is active (not a transferred-away day)."""
+            return set(holidays.index[holidays["type"] == holiday_type])
+
+        def _broadcast(date_set: set) -> np.ndarray:
+            """[T, n_stores] array with all stores sharing the same value."""
+            col = np.fromiter(
+                (1.0 if date in date_set else 0.0 for date in train_dates),
+                dtype="float32",
+                count=n_times,
+            )
+            return np.tile(col[:, None], (1, n_stores))
+
+        def _per_store_locale(locale: str, store_col: str) -> np.ndarray:
+            """[T, n_stores] array with per-store holiday indicators matched by locale."""
+            not_transferred = (
+                (holidays["type"] == "Holiday")
+                & (holidays["locale"] == locale)
+                & ~holidays["transferred"]
+            )
+            transfer_rows = (holidays["type"] == "Transfer") & (
+                holidays["locale"] == locale
+            )
+            locale_names = holidays.loc[not_transferred | transfer_rows, "locale_name"]
+            date_to_locale_names = (
+                locale_names.groupby(level=0).apply(frozenset).to_dict()
+            )
+            store_locale_values = sorted_stores[store_col].tolist()
+            arr = np.zeros((n_times, n_stores), dtype="float32")
+            for time_idx, date in enumerate(train_dates):
+                if date in date_to_locale_names:
+                    active_locales = date_to_locale_names[date]
+                    for store_idx, store_locale in enumerate(store_locale_values):
+                        if store_locale in active_locales:
+                            arr[time_idx, store_idx] = 1.0
+            return arr
+
+        # national_holiday: type=Holiday national (not transferred away) + type=Transfer national
+        def _national_holiday_dates() -> set:
+            not_transferred = (
+                (holidays["type"] == "Holiday")
+                & (holidays["locale"] == "National")
+                & ~holidays["transferred"]
+            )
+            transfer_rows = (holidays["type"] == "Transfer") & (
+                holidays["locale"] == "National"
+            )
+            return set(holidays.index[not_transferred | transfer_rows])
+
+        columns: list[np.ndarray] = []
+        for feature in requested_features:
+            if feature == "national_holiday":
+                columns.append(_broadcast(_national_holiday_dates()))
+            elif feature == "event":
+                columns.append(_broadcast(_active_national_dates("Event")))
+            elif feature == "bridge":
+                columns.append(_broadcast(_active_national_dates("Bridge")))
+            elif feature == "work_day":
+                columns.append(_broadcast(_active_national_dates("Work Day")))
+            elif feature == "additional":
+                columns.append(_broadcast(_active_national_dates("Additional")))
+            elif feature == "regional_holiday":
+                columns.append(_per_store_locale("Regional", "state"))
+            elif feature == "local_holiday":
+                columns.append(_per_store_locale("Local", "city"))
+
+        arr_3d = np.stack(columns, axis=-1)  # [T, n_stores, n_features]
+        return torch.from_numpy(arr_3d).to(dtype)  # type: ignore[attr-defined]
 
     @staticmethod
     def _load_train(data_dir: Path) -> pd.DataFrame:
@@ -351,9 +493,10 @@ class StoreData(Dataset):
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return (input, target) windows.
 
-        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil + n_promo + n_store_features]
+        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil + n_promo + n_store_features + n_holiday_features]
             Date features and oil are broadcast across stores; store features are broadcast across time.
             Promotion features are store-specific; n_promo equals n_families when enabled.
+            Holiday features are per-store (national ones broadcast, locale-specific ones matched).
         target shape: [output_lags, n_stores, n_families] (sales only).
         """
         start = index
@@ -382,6 +525,8 @@ class StoreData(Dataset):
                 self.window_lags, -1, -1
             )
             parts.append(store_features_expanded)
+        if self.holiday_tensor is not None:
+            parts.append(self.holiday_tensor[start:mid])
         if len(parts) == 1:
             return parts[0], self.sales_tensor[mid:end]
         return (
@@ -400,6 +545,13 @@ class StoreData(Dataset):
             return 0
         return self.store_feature_tensor.shape[1]
 
+    @property
+    def n_holiday_features(self) -> int:
+        """Number of holiday feature channels appended to each input timestep."""
+        if self.holiday_tensor is None:
+            return 0
+        return self.holiday_tensor.shape[2]
+
     def __repr__(self) -> str:
         T, n_stores, n_families = self.sales_tensor.shape
         n_promo = n_families if self.promotion_tensor is not None else 0
@@ -409,11 +561,13 @@ class StoreData(Dataset):
             + (1 if self.include_oil else 0)
             + n_promo
             + self.n_store_features
+            + self.n_holiday_features
         )
         return (
             f"StoreData(T={T}, n_stores={n_stores}, "
             f"n_families={n_families}, n_date_features={self.n_date_features}, "
             f"include_oil={self.include_oil}, n_store_features={self.n_store_features}, "
+            f"n_holiday_features={self.n_holiday_features}, "
             f"n_input_features={n_input}, "
             f"window_lags={self.window_lags}, output_lags={self.output_lags})"
         )

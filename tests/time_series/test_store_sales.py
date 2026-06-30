@@ -5,7 +5,11 @@ import pandas as pd
 import pytest
 import torch
 
-from time_series.store_sales import EarthquakeEncoding, MSLELoss, StoreData
+from time_series.store_sales import (
+    EarthquakeEncoding,
+    MSLELoss,
+    StoreData,
+)
 
 DATES = pd.to_datetime(["2013-01-01", "2013-01-02", "2013-01-03"])
 STORE_NBRS = [1, 2]
@@ -418,3 +422,294 @@ def test_msle_loss_reduction_sum() -> None:
     assert loss_sum(pred, target).item() == pytest.approx(
         loss_mean(pred, target).item() * 3
     )
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _setup_holiday_tensor (static method)
+# ---------------------------------------------------------------------------
+
+# Five-day span used across holiday unit tests.
+_H_DATES = pd.to_datetime(
+    ["2013-01-01", "2013-01-02", "2013-01-03", "2013-01-04", "2013-01-05"]
+)
+
+# Store 1: Quito / Pichincha.  Store 2: Cuenca / Azuay.
+_H_STORES = pd.DataFrame(
+    {"city": ["Quito", "Cuenca"], "state": ["Pichincha", "Azuay"]},
+    index=pd.Index([1, 2], name="store_nbr"),
+)
+
+
+def _make_train(dates: pd.DatetimeIndex) -> pd.DataFrame:
+    """Minimal train DataFrame with a single store/family for a given date range."""
+    rows = [(date, 1, "GROCERY I", 0.0, 0) for date in dates]
+    df = pd.DataFrame(
+        rows, columns=pd.Index(["date", "store_nbr", "family", "sales", "onpromotion"])
+    )
+    return df.set_index(pd.DatetimeIndex(df.pop("date"), name="date"))
+
+
+def _make_holidays(rows: list[tuple]) -> pd.DataFrame:
+    """Build a holidays DataFrame with a DatetimeIndex from (date, type, locale,
+    locale_name, description, transferred) row tuples."""
+    df = pd.DataFrame(
+        rows,
+        columns=pd.Index(
+            ["date", "type", "locale", "locale_name", "description", "transferred"]
+        ),
+    )
+    return df.set_index(pd.DatetimeIndex(pd.to_datetime(df.pop("date")), name="date"))
+
+
+@pytest.fixture()
+def h_train() -> pd.DataFrame:
+    return _make_train(_H_DATES)
+
+
+@pytest.fixture()
+def h_holidays() -> pd.DataFrame:
+    """Holidays covering every feature type plus a transferred/Transfer pair."""
+    return _make_holidays(
+        [
+            # national_holiday (not transferred) — 2013-01-01
+            ("2013-01-01", "Holiday", "National", "Ecuador", "New Year", False),
+            # transferred Holiday — 2013-01-02 should NOT be flagged
+            ("2013-01-02", "Holiday", "National", "Ecuador", "Moved Day", True),
+            # Transfer row — 2013-01-03 IS the actual celebration
+            ("2013-01-03", "Transfer", "National", "Ecuador", "Moved Day", False),
+            # Event — 2013-01-04
+            ("2013-01-04", "Event", "National", "Ecuador", "Election", False),
+            # Bridge — 2013-01-05
+            ("2013-01-05", "Bridge", "National", "Ecuador", "Bridge Day", False),
+            # Work Day — 2013-01-05 (same date as bridge is fine for independent tests)
+            ("2013-01-05", "Work Day", "National", "Ecuador", "Make-up Day", False),
+            # Additional — 2013-01-01
+            ("2013-01-01", "Additional", "National", "Ecuador", "Extra Holiday", False),
+            # Regional holiday for Pichincha (store 1 only) — 2013-01-02
+            ("2013-01-02", "Holiday", "Regional", "Pichincha", "Pichincha Day", False),
+            # Local holiday for Cuenca (store 2 only) — 2013-01-03
+            ("2013-01-03", "Holiday", "Local", "Cuenca", "Cuenca Day", False),
+        ]
+    )
+
+
+def test_setup_holiday_tensor_empty_returns_none(
+    h_train: pd.DataFrame,
+) -> None:
+    result = StoreData._setup_holiday_tensor(_make_holidays([]), h_train, _H_STORES, [])
+    assert result is None
+
+
+def test_holiday_tensor_none_by_default(mock_data_dir: Path) -> None:
+    ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    assert ds.holiday_tensor is None
+    assert ds.n_holiday_features == 0
+
+
+def test_setup_holiday_tensor_shape(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    n_features = 3
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays,
+        h_train,
+        _H_STORES,
+        ["national_holiday", "event", "bridge"],
+    )
+    assert tensor is not None
+    assert tensor.shape == (len(_H_DATES), len(_H_STORES), n_features)
+
+
+def test_setup_holiday_tensor_dtype(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["national_holiday"]
+    )
+    assert tensor is not None
+    assert tensor.dtype == torch.float32  # type: ignore[attr-defined]
+
+
+def test_national_holiday_active_on_non_transferred(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    # 2013-01-01: type=Holiday, national, not transferred → 1.0
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["national_holiday"]
+    )
+    assert tensor is not None
+    assert tensor[0, :, 0].tolist() == [1.0, 1.0]
+
+
+def test_national_holiday_inactive_on_transferred(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    # 2013-01-02: type=Holiday but transferred=True → 0.0
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["national_holiday"]
+    )
+    assert tensor is not None
+    assert tensor[1, :, 0].tolist() == [0.0, 0.0]
+
+
+def test_transfer_row_is_active_as_holiday(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    # 2013-01-03: type=Transfer, national → actual celebration date → 1.0
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["national_holiday"]
+    )
+    assert tensor is not None
+    assert tensor[2, :, 0].tolist() == [1.0, 1.0]
+
+
+def test_national_holiday_broadcast_across_stores(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["national_holiday"]
+    )
+    assert tensor is not None
+    # All stores share the same value on every date.
+    assert (tensor[:, 0, 0] == tensor[:, 1, 0]).all()
+
+
+def test_event_feature(h_holidays: pd.DataFrame, h_train: pd.DataFrame) -> None:
+    tensor = StoreData._setup_holiday_tensor(h_holidays, h_train, _H_STORES, ["event"])
+    assert tensor is not None
+    expected = [0.0, 0.0, 0.0, 1.0, 0.0]
+    assert tensor[:, 0, 0].tolist() == expected
+
+
+def test_bridge_feature(h_holidays: pd.DataFrame, h_train: pd.DataFrame) -> None:
+    tensor = StoreData._setup_holiday_tensor(h_holidays, h_train, _H_STORES, ["bridge"])
+    assert tensor is not None
+    expected = [0.0, 0.0, 0.0, 0.0, 1.0]
+    assert tensor[:, 0, 0].tolist() == expected
+
+
+def test_work_day_feature(h_holidays: pd.DataFrame, h_train: pd.DataFrame) -> None:
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["work_day"]
+    )
+    assert tensor is not None
+    expected = [0.0, 0.0, 0.0, 0.0, 1.0]
+    assert tensor[:, 0, 0].tolist() == expected
+
+
+def test_additional_feature(h_holidays: pd.DataFrame, h_train: pd.DataFrame) -> None:
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["additional"]
+    )
+    assert tensor is not None
+    expected = [1.0, 0.0, 0.0, 0.0, 0.0]
+    assert tensor[:, 0, 0].tolist() == expected
+
+
+def test_regional_holiday_per_store(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    # 2013-01-02: regional holiday for Pichincha → store 1 (Pichincha) = 1.0, store 2 (Azuay) = 0.0
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["regional_holiday"]
+    )
+    assert tensor is not None
+    assert tensor[1, 0, 0].item() == pytest.approx(1.0)
+    assert tensor[1, 1, 0].item() == pytest.approx(0.0)
+
+
+def test_regional_holiday_broadcast_check(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    # Dates with no regional holiday should be 0.0 for all stores.
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["regional_holiday"]
+    )
+    assert tensor is not None
+    assert tensor[0, :, 0].tolist() == [0.0, 0.0]  # 2013-01-01: no regional holiday
+
+
+def test_local_holiday_per_store(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    # 2013-01-03: local holiday for Cuenca → store 1 (Quito) = 0.0, store 2 (Cuenca) = 1.0
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["local_holiday"]
+    )
+    assert tensor is not None
+    assert tensor[2, 0, 0].item() == pytest.approx(0.0)
+    assert tensor[2, 1, 0].item() == pytest.approx(1.0)
+
+
+def test_multiple_features_channel_order(
+    h_holidays: pd.DataFrame, h_train: pd.DataFrame
+) -> None:
+    tensor = StoreData._setup_holiday_tensor(
+        h_holidays, h_train, _H_STORES, ["national_holiday", "event", "bridge"]
+    )
+    assert tensor is not None
+    # Channel 0: national_holiday — 1.0 on 2013-01-01
+    assert tensor[0, 0, 0].item() == pytest.approx(1.0)
+    # Channel 1: event — 1.0 on 2013-01-04
+    assert tensor[3, 0, 1].item() == pytest.approx(1.0)
+    # Channel 2: bridge — 1.0 on 2013-01-05
+    assert tensor[4, 0, 2].item() == pytest.approx(1.0)
+
+
+def test_n_holiday_features_property(mock_data_dir: Path) -> None:
+    ds = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        holiday_features=["national_holiday", "event"],
+    )
+    assert ds.n_holiday_features == 2
+
+
+def test_holiday_channels_added_to_item(mock_data_dir: Path) -> None:
+    no_dates = {
+        "date_features": False,
+        "payday_features": False,
+        "earthquake_encoding": None,
+    }
+    ds_base = StoreData(
+        window_lags=1, output_lags=1, data_dir=mock_data_dir, **no_dates
+    )
+    ds_hol = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        holiday_features=["national_holiday", "event"],
+        **no_dates,
+    )
+    x_base, _ = ds_base[0]
+    x_hol, y_hol = ds_hol[0]
+    assert x_hol.shape[-1] == x_base.shape[-1] + 2
+    assert y_hol.shape == (
+        1,
+        ds_hol.sales_tensor.shape[1],
+        ds_hol.sales_tensor.shape[2],
+    )
+
+
+def test_holiday_tensor_shape_full_dataset(mock_data_dir: Path) -> None:
+    ds = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        holiday_features=["national_holiday"],
+    )
+    assert ds.holiday_tensor is not None
+    T = ds.sales_tensor.shape[0]
+    n_stores = ds.stores.shape[0]
+    assert ds.holiday_tensor.shape == (T, n_stores, 1)
+
+
+def test_invalid_holiday_feature_raises(mock_data_dir: Path) -> None:
+    with pytest.raises(ValueError, match="Unknown holiday feature"):
+        StoreData(
+            window_lags=1,
+            output_lags=1,
+            data_dir=mock_data_dir,
+            holiday_features=["bogus"],
+        )
