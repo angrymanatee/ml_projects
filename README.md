@@ -71,7 +71,16 @@ uv run pre-commit run --all-files
 | pyright | Static type checking |
 | nbstripout | Strips notebook output before commit |
 
+## Projects
+
+| Directory | Topic | Reference |
+|-----------|-------|-----------|
+| `time_series/` | Kaggle Store Sales forecasting — Transformer-based RMSLE minimization | [`docs/store_sales_project.md`](docs/store_sales_project.md) |
+| `intro/` | Introductory ML exercises | — |
+
 ## Stack
 
 - Python 3.14, PyTorch 2.12, MPS backend (Apple Silicon)
+- MLflow for experiment tracking (`mlflow ui` to browse runs)
+- Optuna for hyperparameter search
 - `uv` for dependency management — add packages with `uv add <pkg>`
