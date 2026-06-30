@@ -245,6 +245,12 @@ def parse_args() -> argparse.Namespace:
         default=256,
         help="FFN width inside each TransformerEncoderLayer (default: 256)",
     )
+    parser.add_argument(
+        "--oil",
+        action="store_true",
+        default=False,
+        help="append oil price as an extra input channel (broadcast across stores)",
+    )
     return parser.parse_args()
 
 
@@ -258,7 +264,7 @@ def main() -> None:
         else torch.device("cpu")
     )
 
-    store_data = StoreData(dtype=torch.float32)
+    store_data = StoreData(dtype=torch.float32, include_oil=args.oil)
 
     config = {
         "lr": args.lr,
@@ -303,6 +309,7 @@ def main() -> None:
                 "nhead": args.nhead,
                 "num_layers": args.num_layers,
                 "dim_feedforward": args.dim_feedforward,
+                "include_oil": args.oil,
             }
         )
         _val_loss, model, val_loader = train_and_eval(

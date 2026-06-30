@@ -4,6 +4,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import mlflow
 import pandas as pd
 import torch
 from torch import Tensor, nn
@@ -11,7 +12,6 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import mlflow
 from common.paths import get_data_dir
 
 # Date of the 7.8-magnitude earthquake that struck coastal Ecuador.
@@ -42,7 +42,8 @@ class StoreData(Dataset):
     Loads all CSVs on construction and builds a [time, store, family] sales
     tensor and a [time, n_date_features] date features tensor. Acts as a
     sliding-window Dataset: each item is an (input, target) pair where input
-    concatenates sales and broadcast date features along the family axis.
+    concatenates sales, broadcast date features, and optionally oil price
+    along the family axis.
 
     Attributes:
         train, test, sample_submission, stores, oil, holidays: raw DataFrames.
@@ -55,6 +56,9 @@ class StoreData(Dataset):
             Columns appear in the order listed above.
         n_date_features: total number of date feature columns (0–8).
         families: Index mapping column position -> product family name.
+        oil_tensor: float32 Tensor of shape [T] when include_oil=True, else None.
+            NaN gaps (weekends/holidays) are filled via forward-fill then back-fill.
+        include_oil: whether oil price is appended to the input channel dimension.
     """
 
     def __init__(
@@ -68,6 +72,7 @@ class StoreData(Dataset):
         payday_features: bool = True,
         earthquake_encoding: EarthquakeEncoding | None = EarthquakeEncoding.DECAY,
         earthquake_tau: float = 30.0,
+        include_oil: bool = False,
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -87,10 +92,15 @@ class StoreData(Dataset):
                 days_since / 365. Set to None to omit the feature entirely.
             earthquake_tau: decay time constant in days for EarthquakeEncoding.DECAY.
                 Ignored when earthquake_encoding is LINEAR or None.
+            include_oil: if True, the oil price is appended as an extra channel
+                in the input window. Each item's input becomes shape
+                [window_lags, n_stores, n_families + n_date_features + 1]; targets
+                are unchanged.
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
         self.dtype = dtype
+        self.include_oil = include_oil
         self.train = self._load_train(data_dir)
         self.test = self._load_test(data_dir)
         self.sample_submission = self._load_sample_submission(data_dir)
@@ -113,6 +123,9 @@ class StoreData(Dataset):
             dtype,
         )
         self.n_date_features: int = self.date_features_tensor.shape[1]
+        self.oil_tensor: Tensor | None = (
+            self._setup_oil_tensor(self.oil, self.train, dtype) if include_oil else None
+        )
         self._len = self.sales_tensor.shape[0] - window_lags - output_lags
 
     @staticmethod
@@ -217,25 +230,49 @@ class StoreData(Dataset):
             return torch.zeros(len(dates), 0, dtype=dtype)
         return torch.cat(parts, dim=1)
 
+    @staticmethod
+    def _setup_oil_tensor(
+        oil: pd.DataFrame,
+        train: pd.DataFrame,
+        dtype: torch.dtype = torch.float32,
+    ) -> Tensor:
+        """Align oil prices to train dates and fill NaN gaps.
+
+        Oil is reported only on trading days; weekends and holidays are NaN.
+        Forward-fill propagates the last known price, then back-fill covers any
+        leading NaNs at the start of the series.
+        """
+        train_dates = train.index.unique().sort_values()
+        aligned = oil["dcoilwtico"].reindex(train_dates).ffill().bfill()
+        arr = aligned.to_numpy(dtype="float32")
+        return torch.from_numpy(arr).to(dtype)  # type: ignore[attr-defined]
+
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return (input, target) windows.
 
-        input shape:  [window_lags, n_stores, n_families + n_date_features]
-            The last n_date_features channels are date features broadcast across stores.
-        target shape: [output_lags, n_stores, n_families] (sales only, no date features).
+        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil]
+            Date features (if any) are broadcast across stores.
+            Oil price (if enabled) is broadcast across stores as a final channel.
+        target shape: [output_lags, n_stores, n_families] (sales only).
         """
         start = index
         mid = index + self.window_lags
         end = mid + self.output_lags
         sales_window = self.sales_tensor[start:mid]
-        if self.n_date_features == 0:
-            return sales_window, self.sales_tensor[mid:end]
         n_stores = sales_window.shape[1]
-        date_window = (
-            self.date_features_tensor[start:mid].unsqueeze(1).expand(-1, n_stores, -1)
-        )
+        parts: list[Tensor] = [sales_window]
+        if self.n_date_features > 0:
+            date_window = (
+                self.date_features_tensor[start:mid].unsqueeze(1).expand(-1, n_stores, -1)
+            )
+            parts.append(date_window)
+        if self.oil_tensor is not None:
+            oil_channel = self.oil_tensor[start:mid].view(-1, 1, 1).expand(-1, n_stores, 1)
+            parts.append(oil_channel)
+        if len(parts) == 1:
+            return parts[0], self.sales_tensor[mid:end]
         return (
-            torch.cat([sales_window, date_window], dim=-1),
+            torch.cat(parts, dim=-1),  # type: ignore[attr-defined]
             self.sales_tensor[mid:end],
         )
 
@@ -245,11 +282,11 @@ class StoreData(Dataset):
 
     def __repr__(self) -> str:
         T, n_stores, n_families = self.sales_tensor.shape
-        n_input = n_families + self.n_date_features
+        n_input = n_families + self.n_date_features + (1 if self.include_oil else 0)
         return (
             f"StoreData(T={T}, n_stores={n_stores}, "
             f"n_families={n_families}, n_date_features={self.n_date_features}, "
-            f"n_input_features={n_input}, "
+            f"include_oil={self.include_oil}, n_input_features={n_input}, "
             f"window_lags={self.window_lags}, output_lags={self.output_lags})"
         )
 

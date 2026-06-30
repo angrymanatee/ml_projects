@@ -51,9 +51,12 @@ def mock_data_dir(
 
     mock_stores.reset_index().to_csv(d / "stores.csv", index=False)
 
-    pd.DataFrame({"date": ["2013-01-01"], "dcoilwtico": [93.14]}).to_csv(
-        d / "oil.csv", index=False
-    )
+    pd.DataFrame(
+        {
+            "date": ["2013-01-01", "2013-01-02", "2013-01-03"],
+            "dcoilwtico": [93.14, 93.20, 93.08],
+        }
+    ).to_csv(d / "oil.csv", index=False)
 
     pd.DataFrame(
         {

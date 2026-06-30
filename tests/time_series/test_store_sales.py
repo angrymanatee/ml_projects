@@ -288,6 +288,73 @@ def test_date_features_tensor_shape(mock_data_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests — oil tensor setup and include_oil flag
+# ---------------------------------------------------------------------------
+
+
+def test_oil_tensor_none_by_default(ds: StoreData) -> None:
+    assert ds.oil_tensor is None
+
+
+def test_oil_tensor_shape() -> None:
+    ds_oil = StoreData(include_oil=True)
+    num_dates = ds_oil.train.index.nunique()
+    assert ds_oil.oil_tensor is not None
+    assert ds_oil.oil_tensor.shape == (num_dates,)
+
+
+def test_oil_tensor_no_nans() -> None:
+    ds_oil = StoreData(include_oil=True)
+    assert ds_oil.oil_tensor is not None
+    assert not torch.isnan(ds_oil.oil_tensor).any()  # type: ignore[attr-defined]
+
+
+def test_item_shapes_with_oil_enabled(mock_data_dir: Path) -> None:
+    ds_oil = StoreData(
+        window_lags=1, output_lags=1, data_dir=mock_data_dir, include_oil=True
+    )
+    x, y = ds_oil[0]
+    _, n_stores, n_families = ds_oil.sales_tensor.shape
+    # input: sales + date_features + 1 oil channel; target unchanged
+    assert x.shape == (1, n_stores, n_families + ds_oil.n_date_features + 1)
+    assert y.shape == (1, n_stores, n_families)
+
+
+def test_item_shapes_oil_no_date_features(mock_data_dir: Path) -> None:
+    ds_oil = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=None,
+        include_oil=True,
+    )
+    x, y = ds_oil[0]
+    _, n_stores, n_families = ds_oil.sales_tensor.shape
+    assert x.shape == (1, n_stores, n_families + 1)
+    assert y.shape == (1, n_stores, n_families)
+
+
+def test_setup_oil_tensor_ffill(mock_train: pd.DataFrame) -> None:
+    """A leading NaN should be back-filled; mid-series NaN should be forward-filled."""
+    oil_df = pd.DataFrame(
+        {
+            "date": ["2013-01-01", "2013-01-02", "2013-01-03"],
+            "dcoilwtico": [float("nan"), 93.14, float("nan")],
+        },
+    )
+    oil_df = oil_df.set_index(pd.to_datetime(oil_df["date"]))
+    oil_tensor = StoreData._setup_oil_tensor(oil_df, mock_train)
+    assert oil_tensor.shape == (3,)
+    assert not torch.isnan(oil_tensor).any()  # type: ignore[attr-defined]
+    # 2013-01-01: bfilled from 2013-01-02 → 93.14
+    assert oil_tensor[0].item() == pytest.approx(93.14)
+    # 2013-01-03: ffilled from 2013-01-02 → 93.14
+    assert oil_tensor[2].item() == pytest.approx(93.14)
+
+
+# ---------------------------------------------------------------------------
 # Unit tests — MSLELoss
 # ---------------------------------------------------------------------------
 
