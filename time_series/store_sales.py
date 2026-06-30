@@ -1,9 +1,9 @@
+import enum
 import math
 import tempfile
 import time
 from pathlib import Path
 
-import mlflow
 import pandas as pd
 import torch
 from torch import Tensor, nn
@@ -11,7 +11,25 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+import mlflow
 from common.paths import get_data_dir
+
+# Date of the 7.8-magnitude earthquake that struck coastal Ecuador.
+_ECUADOR_EARTHQUAKE_DATE = pd.Timestamp("2016-04-16")
+
+
+class EarthquakeEncoding(enum.StrEnum):
+    """How to encode elapsed time since the 2016 Ecuador earthquake.
+
+    DECAY:  exp(-days_since / tau), equals 1.0 on the event day and decays toward 0.
+            Requires an earthquake_tau parameter (days). Good default when you have
+            a prior on the recovery timescale.
+    LINEAR: days_since / 365, equals 0 on the event day and grows linearly.
+            No hyperparameter; lets the model learn the decay shape via its FFN layers.
+    """
+
+    DECAY = enum.auto()
+    LINEAR = enum.auto()
 
 
 def _date_index(df: pd.DataFrame) -> pd.DataFrame:
@@ -22,12 +40,20 @@ class StoreData(Dataset):
     """Store sales dataset for the Kaggle Store Sales forecasting competition.
 
     Loads all CSVs on construction and builds a [time, store, family] sales
-    tensor. Acts as a sliding-window Dataset: each item is an (input, target)
-    pair of consecutive windows drawn from the training series.
+    tensor and a [time, n_date_features] date features tensor. Acts as a
+    sliding-window Dataset: each item is an (input, target) pair where input
+    concatenates sales and broadcast date features along the family axis.
 
     Attributes:
         train, test, sample_submission, stores, oil, holidays: raw DataFrames.
         sales_tensor: float32 Tensor of shape [T, 54, 33].
+        date_features_tensor: float32 Tensor of shape [T, n_date_features].
+            When date_features=True (5 cols): days since first training date,
+            sin/cos day-of-week (period 7), sin/cos day-of-year (period 365.25).
+            When payday_features=True (2 cols): is_15th, is_month_end.
+            When earthquake_encoding is set (1 col): earthquake proximity signal.
+            Columns appear in the order listed above.
+        n_date_features: total number of date feature columns (0–8).
         families: Index mapping column position -> product family name.
     """
 
@@ -38,6 +64,10 @@ class StoreData(Dataset):
         data_dir: Path | None = None,
         copy: bool = False,
         dtype: torch.dtype = torch.float32,
+        date_features: bool = True,
+        payday_features: bool = True,
+        earthquake_encoding: EarthquakeEncoding | None = EarthquakeEncoding.DECAY,
+        earthquake_tau: float = 30.0,
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -48,6 +78,15 @@ class StoreData(Dataset):
                 <repo_root>/data/store-sales-time-series-forecasting.
             copy: if True, copy the underlying numpy array so the tensor is
                 writable; costs ~2× memory.
+            date_features: if True, append days-since-start, sin/cos day-of-week,
+                and sin/cos day-of-year (5 columns) to each input timestep.
+            payday_features: if True, append is_15th and is_month_end binary
+                indicators (2 columns) to each input timestep.
+            earthquake_encoding: how to encode time since the 2016 Ecuador earthquake
+                (1 column). DECAY uses exp(-days_since / earthquake_tau); LINEAR uses
+                days_since / 365. Set to None to omit the feature entirely.
+            earthquake_tau: decay time constant in days for EarthquakeEncoding.DECAY.
+                Ignored when earthquake_encoding is LINEAR or None.
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
@@ -64,6 +103,16 @@ class StoreData(Dataset):
         self.sales_tensor, self.families = self._setup_tensor(
             self.train, self.stores, dtype, copy
         )
+        dates = pd.DatetimeIndex(self.train.index.unique().sort_values())
+        self.date_features_tensor = self._setup_date_features(
+            dates,
+            date_features,
+            payday_features,
+            earthquake_encoding,
+            earthquake_tau,
+            dtype,
+        )
+        self.n_date_features: int = self.date_features_tensor.shape[1]
         self._len = self.sales_tensor.shape[0] - window_lags - output_lags
 
     @staticmethod
@@ -108,20 +157,101 @@ class StoreData(Dataset):
             arr = arr.copy()
         return torch.from_numpy(arr).to(dtype), families  # type: ignore[attr-defined]
 
+    @staticmethod
+    def _setup_date_features(
+        dates: pd.DatetimeIndex,
+        date_features: bool = True,
+        payday_features: bool = True,
+        earthquake_encoding: EarthquakeEncoding | None = EarthquakeEncoding.DECAY,
+        earthquake_tau: float = 30.0,
+        dtype: torch.dtype = torch.float32,
+    ) -> Tensor:
+        """Build a [T, n_date_features] tensor of enabled date features.
+
+        date_features group (5 cols): days since first date, sin/cos day-of-week,
+            sin/cos day-of-year.
+        payday_features group (2 cols): is_15th, is_month_end.
+        earthquake group (1 col): time-since-earthquake signal; see EarthquakeEncoding.
+        Returns a [T, 0] empty tensor when all groups are disabled.
+        """
+        parts: list[Tensor] = []
+        date_series = dates.to_series()
+        if date_features:
+            epoch = dates[0]
+            days = torch.tensor(
+                [(d - epoch).days for d in dates], dtype=dtype
+            ).unsqueeze(1)
+            two_pi = 2.0 * math.pi
+            dow = torch.tensor(date_series.dt.dayofweek.to_numpy(), dtype=dtype)
+            doy = torch.tensor(date_series.dt.dayofyear.to_numpy(), dtype=dtype)
+            parts += [
+                days,
+                (two_pi * dow / 7).sin().unsqueeze(1),
+                (two_pi * dow / 7).cos().unsqueeze(1),
+                (two_pi * doy / 365.25).sin().unsqueeze(1),
+                (two_pi * doy / 365.25).cos().unsqueeze(1),
+            ]
+        if payday_features:
+            parts += [
+                torch.tensor(
+                    (date_series.dt.day == 15).to_numpy(), dtype=dtype
+                ).unsqueeze(1),
+                torch.tensor(
+                    date_series.dt.is_month_end.to_numpy(), dtype=dtype
+                ).unsqueeze(1),
+            ]
+        if earthquake_encoding is not None:
+            days_since = torch.tensor(
+                [(d - _ECUADOR_EARTHQUAKE_DATE).days for d in dates], dtype=dtype
+            )
+            if earthquake_encoding == EarthquakeEncoding.DECAY:
+                feature = torch.where(
+                    days_since >= 0,
+                    torch.exp(-days_since.clamp(min=0) / earthquake_tau),
+                    torch.zeros_like(days_since),
+                )
+            else:  # LINEAR
+                feature = days_since.clamp(min=0) / 365.0
+            parts.append(feature.unsqueeze(1))
+        if not parts:
+            return torch.zeros(len(dates), 0, dtype=dtype)
+        return torch.cat(parts, dim=1)
+
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
-        """Return (input, target) windows of shape [window_lags, 54, 33] and [output_lags, 54, 33]."""
+        """Return (input, target) windows.
+
+        input shape:  [window_lags, n_stores, n_families + n_date_features]
+            The last n_date_features channels are date features broadcast across stores.
+        target shape: [output_lags, n_stores, n_families] (sales only, no date features).
+        """
         start = index
         mid = index + self.window_lags
         end = mid + self.output_lags
-        return self.sales_tensor[start:mid], self.sales_tensor[mid:end]
+        sales_window = self.sales_tensor[start:mid]
+        if self.n_date_features == 0:
+            return sales_window, self.sales_tensor[mid:end]
+        n_stores = sales_window.shape[1]
+        date_window = (
+            self.date_features_tensor[start:mid].unsqueeze(1).expand(-1, n_stores, -1)
+        )
+        return (
+            torch.cat([sales_window, date_window], dim=-1),
+            self.sales_tensor[mid:end],
+        )
 
     def __len__(self) -> int:
         """Number of stride-1 sliding windows; excludes the final output_lags days."""
         return self._len
 
     def __repr__(self) -> str:
-        shape = self.sales_tensor.shape
-        return f"StoreData(shape={shape}, window_lags={self.window_lags}, output_lags={self.output_lags})"
+        T, n_stores, n_families = self.sales_tensor.shape
+        n_input = n_families + self.n_date_features
+        return (
+            f"StoreData(T={T}, n_stores={n_stores}, "
+            f"n_families={n_families}, n_date_features={self.n_date_features}, "
+            f"n_input_features={n_input}, "
+            f"window_lags={self.window_lags}, output_lags={self.output_lags})"
+        )
 
 
 class MSLELoss(nn.Module):

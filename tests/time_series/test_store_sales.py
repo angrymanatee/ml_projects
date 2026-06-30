@@ -1,14 +1,20 @@
+import math
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import torch
 
-from time_series.store_sales import MSLELoss, StoreData
+from time_series.store_sales import EarthquakeEncoding, MSLELoss, StoreData
 
 DATES = pd.to_datetime(["2013-01-01", "2013-01-02", "2013-01-03"])
 STORE_NBRS = [1, 2]
 FAMILIES = ["AUTOMOTIVE", "GROCERY I"]
+
+# Dates spanning the Ecuador earthquake (2016-04-16) for spot-check tests.
+_QUAKE_DATES = pd.DatetimeIndex(
+    ["2016-04-14", "2016-04-16", "2016-04-17", "2016-05-16"]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -51,13 +57,14 @@ def test_len(ds: StoreData) -> None:
 def test_repr(ds: StoreData) -> None:
     r = repr(ds)
     assert "StoreData" in r
-    assert str(ds.sales_tensor.shape) in r
+    assert f"n_families={len(ds.families)}" in r
+    assert f"window_lags={ds.window_lags}" in r
 
 
 def test_item_shapes(ds: StoreData) -> None:
     x, y = ds[0]
     _, num_stores, num_families = ds.sales_tensor.shape
-    assert x.shape == (ds.window_lags, num_stores, num_families)
+    assert x.shape == (ds.window_lags, num_stores, num_families + ds.n_date_features)
     assert y.shape == (ds.output_lags, num_stores, num_families)
 
 
@@ -102,6 +109,185 @@ def test_custom_lags(mock_data_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests — _setup_date_features
+# ---------------------------------------------------------------------------
+
+
+def test_setup_date_features_default_shape() -> None:
+    # All three groups on: 5 (date) + 2 (payday) + 1 (earthquake) = 8
+    tensor = StoreData._setup_date_features(_QUAKE_DATES)
+    assert tensor.shape == (len(_QUAKE_DATES), 8)
+
+
+def test_setup_date_features_all_disabled() -> None:
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=None,
+    )
+    assert tensor.shape == (len(_QUAKE_DATES), 0)
+
+
+def test_setup_date_features_date_only() -> None:
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES, payday_features=False, earthquake_encoding=None
+    )
+    assert tensor.shape == (len(_QUAKE_DATES), 5)
+
+
+def test_setup_date_features_payday_only() -> None:
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES, date_features=False, earthquake_encoding=None
+    )
+    assert tensor.shape == (len(_QUAKE_DATES), 2)
+
+
+def test_setup_date_features_earthquake_decay_only() -> None:
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=EarthquakeEncoding.DECAY,
+    )
+    assert tensor.shape == (len(_QUAKE_DATES), 1)
+
+
+def test_setup_date_features_earthquake_linear_only() -> None:
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=EarthquakeEncoding.LINEAR,
+    )
+    assert tensor.shape == (len(_QUAKE_DATES), 1)
+
+
+def test_setup_date_features_days_since_epoch() -> None:
+    dates = pd.DatetimeIndex(["2013-01-01", "2013-01-02", "2013-01-05"])
+    tensor = StoreData._setup_date_features(
+        dates, payday_features=False, earthquake_encoding=None
+    )
+    # Col 0 is days since the first date in the index.
+    assert tensor[0, 0].item() == pytest.approx(0.0)
+    assert tensor[1, 0].item() == pytest.approx(1.0)
+    assert tensor[2, 0].item() == pytest.approx(4.0)
+
+
+def test_setup_date_features_dow_sincos() -> None:
+    # 2013-01-01 is a Tuesday (dayofweek=1).
+    dates = pd.DatetimeIndex(["2013-01-01"])
+    tensor = StoreData._setup_date_features(
+        dates, payday_features=False, earthquake_encoding=None
+    )
+    two_pi = 2.0 * math.pi
+    assert tensor[0, 1].item() == pytest.approx(math.sin(two_pi * 1 / 7))
+    assert tensor[0, 2].item() == pytest.approx(math.cos(two_pi * 1 / 7))
+
+
+def test_setup_date_features_is_15th() -> None:
+    dates = pd.DatetimeIndex(["2013-01-14", "2013-01-15", "2013-01-16"])
+    tensor = StoreData._setup_date_features(
+        dates, date_features=False, earthquake_encoding=None
+    )
+    assert tensor[0, 0].item() == pytest.approx(0.0)
+    assert tensor[1, 0].item() == pytest.approx(1.0)
+    assert tensor[2, 0].item() == pytest.approx(0.0)
+
+
+def test_setup_date_features_is_month_end() -> None:
+    dates = pd.DatetimeIndex(["2013-01-30", "2013-01-31", "2013-02-01"])
+    tensor = StoreData._setup_date_features(
+        dates, date_features=False, earthquake_encoding=None
+    )
+    assert tensor[0, 1].item() == pytest.approx(0.0)
+    assert tensor[1, 1].item() == pytest.approx(1.0)
+    assert tensor[2, 1].item() == pytest.approx(0.0)
+
+
+def test_setup_date_features_earthquake_decay_values() -> None:
+    tau = 30.0
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=EarthquakeEncoding.DECAY,
+        earthquake_tau=tau,
+    )
+    col = tensor[:, 0]
+    assert col[0].item() == pytest.approx(0.0)  # 2 days before: 0
+    assert col[1].item() == pytest.approx(1.0)  # earthquake day: exp(0)
+    assert col[2].item() == pytest.approx(math.exp(-1 / tau))  # 1 day after
+    assert col[3].item() == pytest.approx(math.exp(-30 / tau))  # 30 days after
+
+
+def test_setup_date_features_earthquake_linear_values() -> None:
+    tensor = StoreData._setup_date_features(
+        _QUAKE_DATES,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=EarthquakeEncoding.LINEAR,
+    )
+    col = tensor[:, 0]
+    assert col[0].item() == pytest.approx(0.0)  # before: 0
+    assert col[1].item() == pytest.approx(0.0)  # earthquake day: 0 / 365
+    assert col[2].item() == pytest.approx(1 / 365)  # 1 day after
+    assert col[3].item() == pytest.approx(30 / 365)  # 30 days after
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — StoreData date feature integration via mock_data_dir
+# ---------------------------------------------------------------------------
+
+
+def test_n_date_features_default(mock_data_dir: Path) -> None:
+    # Default: all three groups enabled → 8 features.
+    ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    assert ds.n_date_features == 8
+
+
+def test_n_date_features_none(mock_data_dir: Path) -> None:
+    ds = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=None,
+    )
+    assert ds.n_date_features == 0
+
+
+def test_item_input_includes_date_features(mock_data_dir: Path) -> None:
+    ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    x, y = ds[0]
+    _, n_stores, n_families = ds.sales_tensor.shape
+    assert x.shape == (1, n_stores, n_families + ds.n_date_features)
+    assert y.shape == (1, n_stores, n_families)
+
+
+def test_item_no_date_features_matches_sales_shape(mock_data_dir: Path) -> None:
+    ds = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=None,
+    )
+    x, y = ds[0]
+    _, n_stores, n_families = ds.sales_tensor.shape
+    assert x.shape == (1, n_stores, n_families)
+    assert y.shape == (1, n_stores, n_families)
+
+
+def test_date_features_tensor_shape(mock_data_dir: Path) -> None:
+    ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    T = ds.sales_tensor.shape[0]
+    assert ds.date_features_tensor.shape == (T, ds.n_date_features)
+
+
+# ---------------------------------------------------------------------------
 # Unit tests — MSLELoss
 # ---------------------------------------------------------------------------
 
@@ -113,8 +299,6 @@ def test_msle_loss_zero_on_identical_inputs() -> None:
 
 
 def test_msle_loss_matches_manual_formula() -> None:
-    import math
-
     loss = MSLELoss()
     pred = torch.tensor([1.0, 2.0])  # type: ignore[attr-defined]
     target = torch.tensor([2.0, 3.0])  # type: ignore[attr-defined]
