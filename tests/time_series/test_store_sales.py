@@ -323,8 +323,8 @@ def test_item_no_date_features_matches_sales_shape(mock_data_dir: Path) -> None:
 
 def test_date_features_tensor_shape(mock_data_dir: Path) -> None:
     ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
-    T = ds.sales_tensor.shape[0]
-    assert ds.date_features_tensor.shape == (T, ds.n_date_features)
+    n_time_steps = ds.sales_tensor.shape[0]
+    assert ds.date_features_tensor.shape == (n_time_steps, ds.n_date_features)
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +392,90 @@ def test_setup_oil_tensor_ffill(mock_train: pd.DataFrame) -> None:
     assert oil_tensor[0].item() == pytest.approx(93.14)
     # 2013-01-03: ffilled from 2013-01-02 → 93.14
     assert oil_tensor[2].item() == pytest.approx(93.14)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — store feature tensor and __getitem__ integration
+# ---------------------------------------------------------------------------
+
+
+def test_store_feature_tensor_shape(mock_data_dir: Path) -> None:
+    ds = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        date_features=False,
+        payday_features=False,
+        earthquake_encoding=None,
+        store_feature_cols=["type"],
+    )
+    n_stores = ds.stores.shape[0]
+    assert ds.store_feature_tensor is not None
+    # type has 1 unique value ("D") → 1 one-hot column
+    assert ds.store_feature_tensor.shape == (n_stores, 1)
+
+
+def test_store_feature_tensor_none_by_default(mock_data_dir: Path) -> None:
+    ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    assert ds.store_feature_tensor is None
+    assert ds.n_store_features == 0
+
+
+def test_item_shapes_with_store_features(mock_data_dir: Path) -> None:
+    no_dates = {
+        "date_features": False,
+        "payday_features": False,
+        "earthquake_encoding": None,
+    }
+    ds_base = StoreData(
+        window_lags=1, output_lags=1, data_dir=mock_data_dir, **no_dates
+    )
+    ds_store = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        store_feature_cols=["type"],
+        **no_dates,
+    )
+    x_base, _ = ds_base[0]
+    x_store, y_store = ds_store[0]
+    # type has 1 unique value → 1 one-hot column appended
+    assert x_store.shape[-1] == x_base.shape[-1] + 1
+    assert y_store.shape[-1] == len(FAMILIES)
+
+
+def test_store_features_broadcast_across_time(mock_data_dir: Path) -> None:
+    no_dates = {
+        "date_features": False,
+        "payday_features": False,
+        "earthquake_encoding": None,
+    }
+    ds = StoreData(
+        window_lags=2,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        store_feature_cols=["type"],
+        **no_dates,
+    )
+    x, _ = ds[0]
+    # store feature columns should be identical across time steps
+    assert (x[0, :, -1] == x[1, :, -1]).all()
+
+
+def test_n_store_features_property(mock_data_dir: Path) -> None:
+    no_dates = {
+        "date_features": False,
+        "payday_features": False,
+        "earthquake_encoding": None,
+    }
+    ds = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        store_feature_cols=["type"],
+        **no_dates,
+    )
+    assert ds.n_store_features == 1
 
 
 # ---------------------------------------------------------------------------
@@ -700,9 +784,9 @@ def test_holiday_tensor_shape_full_dataset(mock_data_dir: Path) -> None:
         holiday_features=["national_holiday"],
     )
     assert ds.holiday_tensor is not None
-    T = ds.sales_tensor.shape[0]
+    n_time_steps = ds.sales_tensor.shape[0]
     n_stores = ds.stores.shape[0]
-    assert ds.holiday_tensor.shape == (T, n_stores, 1)
+    assert ds.holiday_tensor.shape == (n_time_steps, n_stores, 1)
 
 
 def test_invalid_holiday_feature_raises(mock_data_dir: Path) -> None:

@@ -286,12 +286,8 @@ class StoreData(Dataset):
 
         def _broadcast(date_set: set) -> np.ndarray:
             """[T, n_stores] array with all stores sharing the same value."""
-            col = np.fromiter(
-                (1.0 if date in date_set else 0.0 for date in train_dates),
-                dtype="float32",
-                count=n_times,
-            )
-            return np.tile(col[:, None], (1, n_stores))
+            active_mask = train_dates.isin(date_set).astype("float32")
+            return np.tile(active_mask[:, None], (1, n_stores))
 
         def _per_store_locale(locale: str, store_col: str) -> np.ndarray:
             """[T, n_stores] array with per-store holiday indicators matched by locale."""

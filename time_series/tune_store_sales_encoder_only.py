@@ -93,6 +93,8 @@ def tune(
     study_name: str,
     store_feature_cols: list[str] | None = None,
     holiday_features: list[str] | None = None,
+    include_oil: bool = False,
+    include_onpromotion: bool = False,
 ) -> None:
     """Run the full Optuna study and log results to MLflow.
 
@@ -109,11 +111,17 @@ def tune(
             Passed through to StoreData unchanged.
         holiday_features: holiday/event features to include as binary input channels.
             Passed through to StoreData unchanged.
+        include_oil: if True, append oil price as an extra input channel (broadcast across stores).
+            Passed through to StoreData unchanged.
+        include_onpromotion: if True, include onpromotion as an additional input feature.
+            Passed through to StoreData unchanged.
     """
     store_data = StoreData(
         dtype=torch.float32,
         store_feature_cols=store_feature_cols,
         holiday_features=holiday_features,
+        include_oil=include_oil,
+        include_onpromotion=include_onpromotion,
     )
     device = (
         torch.device("mps")
@@ -147,6 +155,8 @@ def tune(
             "holiday_features": ",".join(holiday_features)
             if holiday_features
             else "none",
+            "include_oil": str(include_oil),
+            "include_onpromotion": str(include_onpromotion),
         },
     ):
         study.optimize(
@@ -195,6 +205,18 @@ def parse_args() -> argparse.Namespace:
             f"(choices: {', '.join(HOLIDAY_FEATURE_COLS)})"
         ),
     )
+    parser.add_argument(
+        "--oil",
+        action="store_true",
+        default=False,
+        help="append oil price as an extra input channel (broadcast across stores)",
+    )
+    parser.add_argument(
+        "--onpromotion",
+        action="store_true",
+        default=False,
+        help="include onpromotion as an additional input feature (default: off)",
+    )
     return parser.parse_args()
 
 
@@ -208,6 +230,8 @@ def main() -> None:
         study_name=args.study_name,
         store_feature_cols=args.store_features,
         holiday_features=args.holiday_features,
+        include_oil=args.oil,
+        include_onpromotion=args.onpromotion,
     )
 
 
