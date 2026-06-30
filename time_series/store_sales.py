@@ -4,7 +4,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import mlflow
 import pandas as pd
 import torch
 from torch import Tensor, nn
@@ -12,6 +11,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+import mlflow
 from common.paths import get_data_dir
 
 # Date of the 7.8-magnitude earthquake that struck coastal Ecuador.
@@ -59,6 +59,8 @@ class StoreData(Dataset):
         oil_tensor: float32 Tensor of shape [T] when include_oil=True, else None.
             NaN gaps (weekends/holidays) are filled via forward-fill then back-fill.
         include_oil: whether oil price is appended to the input channel dimension.
+        promotion_tensor: float32 Tensor of shape [T, 54, 33], or None if
+            include_onpromotion is False.
     """
 
     def __init__(
@@ -73,6 +75,7 @@ class StoreData(Dataset):
         earthquake_encoding: EarthquakeEncoding | None = EarthquakeEncoding.DECAY,
         earthquake_tau: float = 30.0,
         include_oil: bool = False,
+        include_onpromotion: bool = False,
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -96,6 +99,10 @@ class StoreData(Dataset):
                 in the input window. Each item's input becomes shape
                 [window_lags, n_stores, n_families + n_date_features + 1]; targets
                 are unchanged.
+            include_onpromotion: if True, the onpromotion column from train.csv
+                is built into a second tensor and concatenated onto the input
+                window along the families axis. The target window is always
+                sales-only regardless of this flag.
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
@@ -125,6 +132,11 @@ class StoreData(Dataset):
         self.n_date_features: int = self.date_features_tensor.shape[1]
         self.oil_tensor: Tensor | None = (
             self._setup_oil_tensor(self.oil, self.train, dtype) if include_oil else None
+        )
+        self.promotion_tensor: Tensor | None = (
+            self._setup_promotion_tensor(self.train, self.stores, dtype, copy)
+            if include_onpromotion
+            else None
         )
         self._len = self.sales_tensor.shape[0] - window_lags - output_lags
 
@@ -247,12 +259,35 @@ class StoreData(Dataset):
         arr = aligned.to_numpy(dtype="float32")
         return torch.from_numpy(arr).to(dtype)  # type: ignore[attr-defined]
 
+    @staticmethod
+    def _setup_promotion_tensor(
+        train: pd.DataFrame,
+        stores: pd.DataFrame,
+        dtype: torch.dtype = torch.float32,
+        copy: bool = False,
+    ) -> Tensor:
+        """Build a [T, n_stores, n_families] tensor from the onpromotion column.
+
+        Column order matches sales_tensor — both pivot on (store_nbr, family)
+        sorted the same way, so indices align.
+        """
+        num_stores = stores.shape[0]
+        pivot = train.pivot(
+            columns=("store_nbr", "family"), values="onpromotion"
+        ).sort_index(axis="columns")
+        num_families = pivot.columns.get_level_values("family").nunique()
+        arr = pivot.to_numpy().reshape(pivot.shape[0], num_stores, num_families)
+        if copy:
+            arr = arr.copy()
+        return torch.from_numpy(arr).to(dtype)  # type: ignore[attr-defined]
+
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return (input, target) windows.
 
-        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil]
+        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil + n_promo]
             Date features (if any) are broadcast across stores.
-            Oil price (if enabled) is broadcast across stores as a final channel.
+            Oil price (if enabled) is broadcast across stores as a single channel.
+            Promotion features are store-specific; n_promo equals n_families when enabled.
         target shape: [output_lags, n_stores, n_families] (sales only).
         """
         start = index
@@ -263,12 +298,18 @@ class StoreData(Dataset):
         parts: list[Tensor] = [sales_window]
         if self.n_date_features > 0:
             date_window = (
-                self.date_features_tensor[start:mid].unsqueeze(1).expand(-1, n_stores, -1)
+                self.date_features_tensor[start:mid]
+                .unsqueeze(1)
+                .expand(-1, n_stores, -1)
             )
             parts.append(date_window)
         if self.oil_tensor is not None:
-            oil_channel = self.oil_tensor[start:mid].view(-1, 1, 1).expand(-1, n_stores, 1)
+            oil_channel = (
+                self.oil_tensor[start:mid].view(-1, 1, 1).expand(-1, n_stores, 1)
+            )
             parts.append(oil_channel)
+        if self.promotion_tensor is not None:
+            parts.append(self.promotion_tensor[start:mid])
         if len(parts) == 1:
             return parts[0], self.sales_tensor[mid:end]
         return (
@@ -282,7 +323,10 @@ class StoreData(Dataset):
 
     def __repr__(self) -> str:
         T, n_stores, n_families = self.sales_tensor.shape
-        n_input = n_families + self.n_date_features + (1 if self.include_oil else 0)
+        n_promo = n_families if self.promotion_tensor is not None else 0
+        n_input = (
+            n_families + self.n_date_features + (1 if self.include_oil else 0) + n_promo
+        )
         return (
             f"StoreData(T={T}, n_stores={n_stores}, "
             f"n_families={n_families}, n_date_features={self.n_date_features}, "

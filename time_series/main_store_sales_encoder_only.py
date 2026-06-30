@@ -13,11 +13,11 @@ import argparse
 import enum
 from collections import OrderedDict
 
-import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import (
@@ -251,6 +251,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="append oil price as an extra input channel (broadcast across stores)",
     )
+    parser.add_argument(
+        "--onpromotion",
+        action="store_true",
+        default=False,
+        help="include onpromotion as an additional input feature (default: off)",
+    )
     return parser.parse_args()
 
 
@@ -264,7 +270,9 @@ def main() -> None:
         else torch.device("cpu")
     )
 
-    store_data = StoreData(dtype=torch.float32, include_oil=args.oil)
+    store_data = StoreData(
+        dtype=torch.float32, include_oil=args.oil, include_onpromotion=args.onpromotion
+    )
 
     config = {
         "lr": args.lr,
@@ -310,6 +318,7 @@ def main() -> None:
                 "num_layers": args.num_layers,
                 "dim_feedforward": args.dim_feedforward,
                 "include_oil": args.oil,
+                "include_onpromotion": args.onpromotion,
             }
         )
         _val_loss, model, val_loader = train_and_eval(

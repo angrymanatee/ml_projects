@@ -108,6 +108,42 @@ def test_custom_lags(mock_data_dir: Path) -> None:
     assert y.shape[0] == 1
 
 
+def test_setup_promotion_tensor_shape(
+    mock_train: pd.DataFrame, mock_stores: pd.DataFrame
+) -> None:
+    tensor = StoreData._setup_promotion_tensor(mock_train, mock_stores)
+    assert tensor.shape == (len(DATES), len(STORE_NBRS), len(FAMILIES))
+
+
+def test_include_onpromotion_adds_families(mock_data_dir: Path) -> None:
+    no_dates = {
+        "date_features": False,
+        "payday_features": False,
+        "earthquake_encoding": None,
+    }
+    ds_base = StoreData(
+        window_lags=1, output_lags=1, data_dir=mock_data_dir, **no_dates
+    )
+    ds_promo = StoreData(
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        include_onpromotion=True,
+        **no_dates,
+    )
+    x_base, _ = ds_base[0]
+    x_promo, y_promo = ds_promo[0]
+    assert x_promo.shape[-1] == x_base.shape[-1] + len(FAMILIES)
+    assert y_promo.shape[-1] == len(FAMILIES)
+
+
+def test_exclude_onpromotion_default(mock_data_dir: Path) -> None:
+    ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    assert ds.promotion_tensor is None
+    x, _ = ds[0]
+    assert x.shape[-1] == len(FAMILIES) + ds.n_date_features
+
+
 # ---------------------------------------------------------------------------
 # Unit tests — _setup_date_features
 # ---------------------------------------------------------------------------
