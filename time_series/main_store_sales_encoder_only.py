@@ -24,7 +24,7 @@ from common.modules import (
     GetLastIndex,
     PositionalEncoding,
 )
-from time_series.store_sales import MSLELoss, StoreData, Trainer
+from time_series.store_sales import STORE_FEATURE_COLS, MSLELoss, StoreData, Trainer
 from time_series.store_sales_viz import StoreSalesAnalyzer
 
 # ---------------------------------------------------------------------------
@@ -257,6 +257,17 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="include onpromotion as an additional input feature (default: off)",
     )
+    parser.add_argument(
+        "--store-features",
+        nargs="*",
+        choices=list(STORE_FEATURE_COLS),
+        default=[],
+        metavar="COL",
+        help=(
+            f"store metadata columns to append as input features "
+            f"(choices: {', '.join(STORE_FEATURE_COLS)})"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -271,7 +282,10 @@ def main() -> None:
     )
 
     store_data = StoreData(
-        dtype=torch.float32, include_oil=args.oil, include_onpromotion=args.onpromotion
+        dtype=torch.float32,
+        include_oil=args.oil,
+        include_onpromotion=args.onpromotion,
+        store_feature_cols=args.store_features,
     )
 
     config = {
@@ -319,6 +333,9 @@ def main() -> None:
                 "dim_feedforward": args.dim_feedforward,
                 "include_oil": args.oil,
                 "include_onpromotion": args.onpromotion,
+                "store_features": ",".join(args.store_features)
+                if args.store_features
+                else "none",
             }
         )
         _val_loss, model, val_loader = train_and_eval(

@@ -11,14 +11,14 @@ Run with:
 
 import argparse
 
-import mlflow
 import optuna
 import torch
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
-from time_series.store_sales import StoreData
+from time_series.store_sales import STORE_FEATURE_COLS, StoreData
 
 
 def build_config(trial: optuna.Trial) -> dict:
@@ -91,6 +91,7 @@ def tune(
     epochs_per_trial: int,
     split: float,
     study_name: str,
+    store_feature_cols: list[str] | None = None,
 ) -> None:
     """Run the full Optuna study and log results to MLflow.
 
@@ -103,8 +104,10 @@ def tune(
         epochs_per_trial: training epochs per trial; lower = faster search, noisier estimates.
         split: train/val split fraction.
         study_name: name passed to optuna.create_study and used as the MLflow parent run name.
+        store_feature_cols: store metadata columns to include as input features.
+            Passed through to StoreData unchanged.
     """
-    store_data = StoreData(dtype=torch.float32)
+    store_data = StoreData(dtype=torch.float32, store_feature_cols=store_feature_cols)
     device = (
         torch.device("mps")
         if torch.backends.mps.is_available()
@@ -131,6 +134,9 @@ def tune(
             "git_sha": get_sha(),
             "n_trials": str(n_trials),
             "epochs_per_trial": str(epochs_per_trial),
+            "store_features": ",".join(store_feature_cols)
+            if store_feature_cols
+            else "none",
         },
     ):
         study.optimize(
@@ -157,6 +163,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs-per-trial", type=_positive_int, default=50)
     parser.add_argument("--split", type=float, default=0.9)
     parser.add_argument("--study-name", type=str, default="store_sales_encoder_only")
+    parser.add_argument(
+        "--store-features",
+        nargs="*",
+        choices=list(STORE_FEATURE_COLS),
+        default=[],
+        metavar="COL",
+        help=(
+            f"store metadata columns to append as input features "
+            f"(choices: {', '.join(STORE_FEATURE_COLS)})"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -168,6 +185,7 @@ def main() -> None:
         epochs_per_trial=args.epochs_per_trial,
         split=args.split,
         study_name=args.study_name,
+        store_feature_cols=args.store_features,
     )
 
 

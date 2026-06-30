@@ -4,6 +4,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 from torch import Tensor, nn
@@ -36,6 +37,9 @@ def _date_index(df: pd.DataFrame) -> pd.DataFrame:
     return df.set_index(pd.to_datetime(df["date"]))
 
 
+STORE_FEATURE_COLS = ("city", "state", "type", "cluster")
+
+
 class StoreData(Dataset):
     """Store sales dataset for the Kaggle Store Sales forecasting competition.
 
@@ -44,6 +48,11 @@ class StoreData(Dataset):
     sliding-window Dataset: each item is an (input, target) pair where input
     concatenates sales, broadcast date features, and optionally oil price
     along the family axis.
+
+    When store_feature_cols is non-empty, each input window has static store
+    metadata (one-hot encoded) concatenated along the family dimension. All
+    temporal and store features are appended in order: sales, date features,
+    store features. Targets are always [output_lags, n_stores, n_families].
 
     Attributes:
         train, test, sample_submission, stores, oil, holidays: raw DataFrames.
@@ -61,6 +70,10 @@ class StoreData(Dataset):
         include_oil: whether oil price is appended to the input channel dimension.
         promotion_tensor: float32 Tensor of shape [T, 54, 33], or None if
             include_onpromotion is False.
+        store_feature_tensor: float32 Tensor of shape [54, n_store_features],
+            or None if no store features were requested.
+        store_feature_encoders: dict mapping column name -> sorted unique values
+            used for label encoding (categorical columns only).
     """
 
     def __init__(
@@ -76,6 +89,7 @@ class StoreData(Dataset):
         earthquake_tau: float = 30.0,
         include_oil: bool = False,
         include_onpromotion: bool = False,
+        store_feature_cols: list[str] | None = None,
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -103,6 +117,10 @@ class StoreData(Dataset):
                 is built into a second tensor and concatenated onto the input
                 window along the families axis. The target window is always
                 sales-only regardless of this flag.
+            store_feature_cols: subset of ("city", "state", "type", "cluster")
+                to include as extra per-store input features appended along the
+                family dimension after date features. Categoricals are one-hot
+                encoded; "cluster" is passed through as a single numeric column.
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
@@ -139,6 +157,55 @@ class StoreData(Dataset):
             else None
         )
         self._len = self.sales_tensor.shape[0] - window_lags - output_lags
+
+        requested_cols = list(store_feature_cols) if store_feature_cols else []
+        invalid = set(requested_cols) - set(STORE_FEATURE_COLS)
+        if invalid:
+            raise ValueError(
+                f"Unknown store feature column(s): {invalid}. "
+                f"Valid options: {STORE_FEATURE_COLS}"
+            )
+        self.store_feature_tensor, self.store_feature_encoders = (
+            self._build_store_features(self.stores, requested_cols, dtype)
+        )
+
+    @staticmethod
+    def _build_store_features(
+        stores: pd.DataFrame,
+        cols: list[str],
+        dtype: torch.dtype,
+    ) -> tuple[Tensor | None, dict[str, list]]:
+        """Build a [n_stores, n_features] tensor of encoded store metadata.
+
+        Stores are taken in store_nbr order (ascending index). Categorical
+        columns (city, state, type) are one-hot encoded using sorted unique
+        values. The numeric column (cluster) is a single column cast directly.
+
+        Returns:
+            (tensor, encoders) where encoders maps each categorical column name
+            to its sorted list of unique values (index = one-hot position).
+            tensor is None when cols is empty.
+        """
+        if not cols:
+            return None, {}
+
+        categorical_cols = {"city", "state", "type"}
+        sorted_stores = stores.sort_index()
+        encoders: dict[str, list] = {}
+        blocks: list[np.ndarray] = []
+        for col in cols:
+            series = sorted_stores[col]
+            if col in categorical_cols:
+                unique_values = sorted(series.unique().tolist())
+                encoders[col] = unique_values
+                label_map = {v: i for i, v in enumerate(unique_values)}
+                indices = np.array([label_map[v] for v in series], dtype=np.intp)
+                blocks.append(np.eye(len(unique_values), dtype="float32")[indices])
+            else:
+                blocks.append(series.to_numpy(dtype="float32")[:, None])
+
+        arr = np.concatenate(blocks, axis=1)
+        return torch.from_numpy(arr).to(dtype), encoders  # type: ignore[attr-defined]
 
     @staticmethod
     def _load_train(data_dir: Path) -> pd.DataFrame:
@@ -284,9 +351,8 @@ class StoreData(Dataset):
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return (input, target) windows.
 
-        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil + n_promo]
-            Date features (if any) are broadcast across stores.
-            Oil price (if enabled) is broadcast across stores as a single channel.
+        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil + n_promo + n_store_features]
+            Date features and oil are broadcast across stores; store features are broadcast across time.
             Promotion features are store-specific; n_promo equals n_families when enabled.
         target shape: [output_lags, n_stores, n_families] (sales only).
         """
@@ -310,6 +376,12 @@ class StoreData(Dataset):
             parts.append(oil_channel)
         if self.promotion_tensor is not None:
             parts.append(self.promotion_tensor[start:mid])
+        if self.store_feature_tensor is not None:
+            # [n_stores, n_store_features] → [window_lags, n_stores, n_store_features]
+            store_features_expanded = self.store_feature_tensor.unsqueeze(0).expand(
+                self.window_lags, -1, -1
+            )
+            parts.append(store_features_expanded)
         if len(parts) == 1:
             return parts[0], self.sales_tensor[mid:end]
         return (
@@ -321,16 +393,28 @@ class StoreData(Dataset):
         """Number of stride-1 sliding windows; excludes the final output_lags days."""
         return self._len
 
+    @property
+    def n_store_features(self) -> int:
+        """Number of extra store feature channels appended to each input timestep."""
+        if self.store_feature_tensor is None:
+            return 0
+        return self.store_feature_tensor.shape[1]
+
     def __repr__(self) -> str:
         T, n_stores, n_families = self.sales_tensor.shape
         n_promo = n_families if self.promotion_tensor is not None else 0
         n_input = (
-            n_families + self.n_date_features + (1 if self.include_oil else 0) + n_promo
+            n_families
+            + self.n_date_features
+            + (1 if self.include_oil else 0)
+            + n_promo
+            + self.n_store_features
         )
         return (
             f"StoreData(T={T}, n_stores={n_stores}, "
             f"n_families={n_families}, n_date_features={self.n_date_features}, "
-            f"include_oil={self.include_oil}, n_input_features={n_input}, "
+            f"include_oil={self.include_oil}, n_store_features={self.n_store_features}, "
+            f"n_input_features={n_input}, "
             f"window_lags={self.window_lags}, output_lags={self.output_lags})"
         )
 
