@@ -11,10 +11,10 @@ Run with:
 
 import argparse
 
+import mlflow
 import optuna
 import torch
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
@@ -95,7 +95,7 @@ def tune(
     holiday_features: list[str] | None = None,
     include_oil: bool = False,
     include_onpromotion: bool = False,
-) -> None:
+) -> optuna.Study:
     """Run the full Optuna study and log results to MLflow.
 
     Loads StoreData once and reuses it across all trials. Creates a minimization
@@ -115,6 +115,10 @@ def tune(
             Passed through to StoreData unchanged.
         include_onpromotion: if True, include onpromotion as an additional input feature.
             Passed through to StoreData unchanged.
+
+    Returns:
+        The completed Optuna study; caller can inspect study.best_trial.params for the
+        winning hyperparameter configuration.
     """
     store_data = StoreData(
         dtype=torch.float32,
@@ -149,12 +153,12 @@ def tune(
             "git_sha": get_sha(),
             "n_trials": str(n_trials),
             "epochs_per_trial": str(epochs_per_trial),
-            "store_features": ",".join(store_feature_cols)
-            if store_feature_cols
-            else "none",
-            "holiday_features": ",".join(holiday_features)
-            if holiday_features
-            else "none",
+            "store_features": (
+                ",".join(store_feature_cols) if store_feature_cols else "none"
+            ),
+            "holiday_features": (
+                ",".join(holiday_features) if holiday_features else "none"
+            ),
             "include_oil": str(include_oil),
             "include_onpromotion": str(include_onpromotion),
         },
@@ -166,6 +170,8 @@ def tune(
         if study.best_trials:
             mlflow.log_metric("best_val_loss", study.best_value)
             mlflow.log_param("best_trial", study.best_trial.number)
+
+    return study
 
 
 def _positive_int(value: str) -> int:

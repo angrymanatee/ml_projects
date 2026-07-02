@@ -13,11 +13,11 @@ import argparse
 import enum
 from collections import OrderedDict
 
+import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import (
@@ -219,7 +219,7 @@ def train_and_eval(
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for training hyperparameters and model config."""
     parser = argparse.ArgumentParser(description="Train StoreSalesTransformer")
-    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument(
         "--save-every",
         type=int,
@@ -227,7 +227,7 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="save a checkpoint every N epochs (default: 50)",
     )
-    parser.add_argument("--lr", type=float, default=1.75e-3, metavar="LR")
+    parser.add_argument("--lr", type=float, default=0.0011852762898126566, metavar="LR")
     parser.add_argument(
         "--split",
         type=float,
@@ -248,41 +248,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dim-feedforward",
         type=int,
-        default=256,
-        help="FFN width inside each TransformerEncoderLayer (default: 256)",
+        default=512,
+        help="FFN width inside each TransformerEncoderLayer (default: 512)",
     )
     parser.add_argument(
         "--oil",
         action="store_true",
-        default=False,
-        help="append oil price as an extra input channel (broadcast across stores)",
+        default=True,
+        help="append oil price as an extra input channel (default: on)",
+    )
+    parser.add_argument(
+        "--no-oil",
+        dest="oil",
+        action="store_false",
+        help="disable oil price input channel",
     )
     parser.add_argument(
         "--onpromotion",
         action="store_true",
-        default=False,
-        help="include onpromotion as an additional input feature (default: off)",
+        default=True,
+        help="include onpromotion as an additional input feature (default: on)",
+    )
+    parser.add_argument(
+        "--no-onpromotion",
+        dest="onpromotion",
+        action="store_false",
+        help="disable onpromotion input feature",
     )
     parser.add_argument(
         "--store-features",
         nargs="*",
         choices=list(STORE_FEATURE_COLS),
-        default=[],
+        default=list(STORE_FEATURE_COLS),
         metavar="COL",
         help=(
             f"store metadata columns to append as input features "
-            f"(choices: {', '.join(STORE_FEATURE_COLS)})"
+            f"(choices: {', '.join(STORE_FEATURE_COLS)}, default: all)"
         ),
     )
     parser.add_argument(
         "--holiday-features",
         nargs="*",
         choices=list(HOLIDAY_FEATURE_COLS),
-        default=[],
+        default=list(HOLIDAY_FEATURE_COLS),
         metavar="FEAT",
         help=(
             f"holiday/event features to append as binary input channels "
-            f"(choices: {', '.join(HOLIDAY_FEATURE_COLS)})"
+            f"(choices: {', '.join(HOLIDAY_FEATURE_COLS)}, default: all)"
         ),
     )
     return parser.parse_args()
@@ -351,12 +363,12 @@ def main() -> None:
                 "dim_feedforward": args.dim_feedforward,
                 "include_oil": args.oil,
                 "include_onpromotion": args.onpromotion,
-                "store_features": ",".join(args.store_features)
-                if args.store_features
-                else "none",
-                "holiday_features": ",".join(args.holiday_features)
-                if args.holiday_features
-                else "none",
+                "store_features": (
+                    ",".join(args.store_features) if args.store_features else "none"
+                ),
+                "holiday_features": (
+                    ",".join(args.holiday_features) if args.holiday_features else "none"
+                ),
             }
         )
         _val_loss, model, val_loader = train_and_eval(

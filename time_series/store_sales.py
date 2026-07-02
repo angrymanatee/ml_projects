@@ -4,15 +4,16 @@ import tempfile
 import time
 from pathlib import Path
 
+import mlflow
 import numpy as np
 import pandas as pd
 import torch
 from torch import Tensor, nn
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import mlflow
 from common.paths import get_data_dir
 
 # Date of the 7.8-magnitude earthquake that struck coastal Ecuador.
@@ -616,6 +617,10 @@ class Trainer:
     def train(self, epochs: int, save_every_n_epochs: int | None = None) -> float:
         """Run the full training loop for `epochs` epochs.
 
+        Learning rate follows a cosine annealing schedule from the initial
+        learning_rate down to ~0 over the course of the run, so `epochs` sets the
+        schedule's period in addition to the loop length.
+
         Args:
             epochs: total number of passes over the training set.
             save_every_n_epochs: if set, save a periodic checkpoint every N epochs
@@ -624,6 +629,7 @@ class Trainer:
         Returns:
             Best validation loss observed across all epochs.
         """
+        scheduler = CosineAnnealingLR(self.optim, T_max=epochs)
         progress_bar = tqdm(range(epochs))
         digits = math.ceil(math.log10(epochs))
         train_loss = torch.nan
@@ -649,6 +655,11 @@ class Trainer:
             ):
                 progress_bar.set_description("saving periodic...")
                 self._checkpoint(f"epoch_{epoch_idx:0{digits}}")
+            if self.log_metrics:
+                mlflow.log_metrics(
+                    {"lr": float(scheduler.get_last_lr()[0])}, step=epoch_idx
+                )
+            scheduler.step()
         return best_val_loss
 
     def train_loop(self, epoch_idx: int) -> Tensor:
