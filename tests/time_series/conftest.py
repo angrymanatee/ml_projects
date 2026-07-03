@@ -28,7 +28,12 @@ def mock_train() -> pd.DataFrame:
 @pytest.fixture(scope="module")
 def mock_stores() -> pd.DataFrame:
     return pd.DataFrame(
-        {"city": ["Quito", "Guayaquil"], "type": ["D", "D"]},
+        {
+            "city": ["Quito", "Guayaquil"],
+            "state": ["Pichincha", "Guayas"],
+            "type": ["D", "D"],
+            "cluster": [1, 2],
+        },
         index=pd.Index(_STORE_NBRS, name="store_nbr"),
     )
 

@@ -160,7 +160,7 @@ def test_train_and_eval_returns_finite_loss(mock_data_dir: Path) -> None:
         unittest.mock.patch("mlflow.set_tag"),
         unittest.mock.patch("mlflow.log_artifact"),
         unittest.mock.patch("mlflow.pytorch.autolog"),
-        unittest.mock.patch("time_series.store_sales.DataLoader"),
+        unittest.mock.patch("time_series.store_sales.runners.DataLoader"),
         unittest.mock.patch.object(Trainer, "train_loop", return_value=fixed_loss),
         unittest.mock.patch.object(Trainer, "val_loop", return_value=fixed_loss),
         unittest.mock.patch.object(Trainer, "_checkpoint"),

@@ -378,7 +378,10 @@ class StoreSalesAnalyzer:
         return squared_log_errors.mean(dim=(0, 1)).sqrt()
 
     def _log_series_plots(self, predictions: Tensor, targets: Tensor) -> None:
-        """Log one plot_series figure per family (all stores overlaid) for a single val window.
+        """Log series plots per family: one ALL-stores overlay and one per-store plot.
+
+        Directory structure: analysis/series/{family}/ALL.html and
+        analysis/series/{family}/store_{n}.html for each store number.
 
         Args:
             predictions: shape [output_lags, n_stores, n_families] — first val sample.
@@ -387,16 +390,31 @@ class StoreSalesAnalyzer:
         store_nbrs = list(self.stores.index)
         for family_name in self.families:
             slug = family_name.replace("/", "_").replace(",", "_").replace(" ", "_")
-            fig = plot_series(
-                targets=targets,
-                stores=self.stores,
-                families=self.families,
-                store_nbr=store_nbrs,
-                family=family_name,
-                predictions=predictions,
-                title=f"{family_name} — all stores (first val window)",
+            self._log_figure(
+                plot_series(
+                    targets=targets,
+                    stores=self.stores,
+                    families=self.families,
+                    store_nbr=store_nbrs,
+                    family=family_name,
+                    predictions=predictions,
+                    title=f"{family_name} — all stores (first val window)",
+                ),
+                f"analysis/series/{slug}/ALL",
             )
-            self._log_figure(fig, f"analysis/series/{slug}")
+            for store_nbr in store_nbrs:
+                self._log_figure(
+                    plot_series(
+                        targets=targets,
+                        stores=self.stores,
+                        families=self.families,
+                        store_nbr=store_nbr,
+                        family=family_name,
+                        predictions=predictions,
+                        title=f"{family_name} — store {store_nbr} (first val window)",
+                    ),
+                    f"analysis/series/{slug}/store_{store_nbr}",
+                )
 
     @staticmethod
     def _log_figure(fig: go.Figure, artifact_path: str) -> None:

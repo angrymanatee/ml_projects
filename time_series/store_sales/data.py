@@ -1,21 +1,14 @@
 import enum
 import math
-import tempfile
-import time
-from collections import OrderedDict
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from torch import Tensor, nn
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, Dataset, Subset
-from tqdm import tqdm
+from torch import Tensor
+from torch.utils.data import Dataset
 
-import mlflow
-from common.modules import GetLastIndex, PositionalEncoding
 from common.paths import get_data_dir
 
 # Date of the 7.8-magnitude earthquake that struck coastal Ecuador.
@@ -56,16 +49,18 @@ HOLIDAY_FEATURE_COLS = (
 class StoreData(Dataset):
     """Store sales dataset for the Kaggle Store Sales forecasting competition.
 
-    Loads all CSVs on construction and builds a [time, store, family] sales
-    tensor and a [time, n_date_features] date features tensor. Acts as a
-    sliding-window Dataset: each item is an (input, target) pair where input
-    concatenates sales, broadcast date features, and optionally oil price
-    along the family axis.
+    Loads all CSVs on construction and builds a [T, n_stores, n_families] sales
+    tensor plus auxiliary feature tensors. Acts as a sliding-window Dataset:
+    each item is an (input, target) pair. By default all feature groups are
+    enabled.
 
-    When store_feature_cols is non-empty, each input window has static store
-    metadata (one-hot encoded) concatenated along the family dimension. All
-    temporal and store features are appended in order: sales, date features,
-    store features. Targets are always [output_lags, n_stores, n_families].
+    Input shape per item:
+        [window_lags, n_stores, n_families, n_input_channels]  (flatten_output=False)
+        [window_lags, n_stores, n_families * n_input_channels] (flatten_output=True)
+    Feature axis order: sales (1), promotion (1), date (n_date_features),
+    oil (1), store features (n_store_features), holiday (n_holiday_features).
+    Sales and promotion vary per family; all other features are broadcast.
+    Target shape is always [output_lags, n_stores, n_families] (sales only).
 
     Attributes:
         train, test, sample_submission, stores, oil, holidays: raw DataFrames.
@@ -80,7 +75,7 @@ class StoreData(Dataset):
         families: Index mapping column position -> product family name.
         oil_tensor: float32 Tensor of shape [T] when include_oil=True, else None.
             NaN gaps (weekends/holidays) are filled via forward-fill then back-fill.
-        include_oil: whether oil price is appended to the input channel dimension.
+        include_oil: whether oil price is included in the input.
         promotion_tensor: float32 Tensor of shape [T, 54, 33], or None if
             include_onpromotion is False.
         store_feature_tensor: float32 Tensor of shape [54, n_store_features],
@@ -93,6 +88,8 @@ class StoreData(Dataset):
             across all stores. Per-store features (regional_holiday, local_holiday)
             are matched by state and city respectively.
         n_holiday_features: number of holiday feature channels (0 when disabled).
+        flatten_output: if True, __getitem__ returns a 3D input tensor with the
+            family and feature axes merged into one.
     """
 
     def __init__(
@@ -106,10 +103,11 @@ class StoreData(Dataset):
         payday_features: bool = True,
         earthquake_encoding: EarthquakeEncoding | None = EarthquakeEncoding.DECAY,
         earthquake_tau: float = 30.0,
-        include_oil: bool = False,
-        include_onpromotion: bool = False,
-        store_feature_cols: list[str] | None = None,
-        holiday_features: list[str] | None = None,
+        include_oil: bool = True,
+        include_onpromotion: bool = True,
+        store_feature_cols: Iterable[str] | None = STORE_FEATURE_COLS,
+        holiday_features: Iterable[str] | None = HOLIDAY_FEATURE_COLS,
+        flatten_output: bool = False,
     ) -> None:
         """Load data and build the sales tensor.
 
@@ -129,30 +127,28 @@ class StoreData(Dataset):
                 days_since / 365. Set to None to omit the feature entirely.
             earthquake_tau: decay time constant in days for EarthquakeEncoding.DECAY.
                 Ignored when earthquake_encoding is LINEAR or None.
-            include_oil: if True, the oil price is appended as an extra channel
-                in the input window. Each item's input becomes shape
-                [window_lags, n_stores, n_families + n_date_features + 1]; targets
-                are unchanged.
-            include_onpromotion: if True, the onpromotion column from train.csv
-                is built into a second tensor and concatenated onto the input
-                window along the families axis. The target window is always
-                sales-only regardless of this flag.
-            store_feature_cols: subset of ("city", "state", "type", "cluster")
-                to include as extra per-store input features appended along the
-                family dimension after date features. Categoricals are one-hot
-                encoded; "cluster" is passed through as a single numeric column.
-            holiday_features: subset of HOLIDAY_FEATURE_COLS to include as
-                additional binary input channels. National-scope features
-                (national_holiday, event, bridge, work_day, additional) are
-                broadcast across all 54 stores. Per-store features
-                (regional_holiday, local_holiday) are matched by store state
-                and city respectively. Transferred holidays are treated as
-                ordinary days; Transfer rows mark the actual celebration date.
+            include_oil: if True, oil price is appended as an extra feature channel.
+            include_onpromotion: if True, per-family promotion flags are appended as
+                an extra feature channel. The target window is always sales-only.
+            store_feature_cols: columns from ("city", "state", "type", "cluster") to
+                include as static per-store feature channels. Defaults to all four.
+                Categoricals are one-hot encoded; "cluster" is a single numeric column.
+            holiday_features: subset of HOLIDAY_FEATURE_COLS to include as binary
+                feature channels. Defaults to all seven. National-scope features
+                (national_holiday, event, bridge, work_day, additional) are broadcast
+                across all 54 stores; per-store features (regional_holiday,
+                local_holiday) are matched by store state and city respectively.
+                Transferred holidays are treated as ordinary days.
+            flatten_output: if True, __getitem__ returns a 3D input tensor of shape
+                [window_lags, n_stores, n_families * n_input_channels] by merging the
+                family and feature axes. Useful for models that expect a flat last
+                dimension. Default False returns the full 4D shape.
         """
         if data_dir is None:
             data_dir = get_data_dir() / "store-sales-time-series-forecasting"
         self.dtype = dtype
         self.include_oil = include_oil
+        self.flatten_output = flatten_output
         self.train = self._load_train(data_dir)
         self.test = self._load_test(data_dir)
         self.sample_submission = self._load_sample_submission(data_dir)
@@ -489,49 +485,66 @@ class StoreData(Dataset):
             arr = arr.copy()
         return torch.from_numpy(arr).to(dtype)  # type: ignore[attr-defined]
 
+    def _build_window_parts(self, start: int, mid: int) -> list[Tensor]:
+        """Build feature parts for the window [start:mid], each [T, S, F, k].
+
+        Feature order: sales, promotion, date, oil, store, holiday.
+        Per-family features (sales, promo) naturally vary across F.
+        All other features are broadcast across the family axis via expand.
+        """
+        _, n_stores, n_families = self.sales_tensor.shape
+        T = mid - start
+        parts: list[Tensor] = [self.sales_tensor[start:mid].unsqueeze(-1)]
+
+        if self.promotion_tensor is not None:
+            parts.append(self.promotion_tensor[start:mid].unsqueeze(-1))
+
+        if self.n_date_features > 0:
+            parts.append(
+                self.date_features_tensor[start:mid]
+                .view(T, 1, 1, self.n_date_features)
+                .expand(T, n_stores, n_families, -1)
+            )
+
+        if self.oil_tensor is not None:
+            parts.append(
+                self.oil_tensor[start:mid]
+                .view(T, 1, 1, 1)
+                .expand(T, n_stores, n_families, 1)
+            )
+
+        if self.store_feature_tensor is not None:
+            parts.append(
+                self.store_feature_tensor.view(1, n_stores, 1, -1).expand(
+                    T, n_stores, n_families, -1
+                )
+            )
+
+        if self.holiday_tensor is not None:
+            parts.append(
+                self.holiday_tensor[start:mid]
+                .unsqueeze(2)
+                .expand(T, n_stores, n_families, -1)
+            )
+
+        return parts
+
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return (input, target) windows.
 
-        input shape:  [window_lags, n_stores, n_families + n_date_features + n_oil + n_promo + n_store_features + n_holiday_features]
-            Date features and oil are broadcast across stores; store features are broadcast across time.
-            Promotion features are store-specific; n_promo equals n_families when enabled.
-            Holiday features are per-store (national ones broadcast, locale-specific ones matched).
+        input shape (flatten_output=False): [window_lags, n_stores, n_families, n_input_channels]
+        input shape (flatten_output=True):  [window_lags, n_stores, n_families * n_input_channels]
         target shape: [output_lags, n_stores, n_families] (sales only).
         """
         start = index
         mid = index + self.window_lags
         end = mid + self.output_lags
-        sales_window = self.sales_tensor[start:mid]
-        n_stores = sales_window.shape[1]
-        parts: list[Tensor] = [sales_window]
-        if self.n_date_features > 0:
-            date_window = (
-                self.date_features_tensor[start:mid]
-                .unsqueeze(1)
-                .expand(-1, n_stores, -1)
-            )
-            parts.append(date_window)
-        if self.oil_tensor is not None:
-            oil_channel = (
-                self.oil_tensor[start:mid].view(-1, 1, 1).expand(-1, n_stores, 1)
-            )
-            parts.append(oil_channel)
-        if self.promotion_tensor is not None:
-            parts.append(self.promotion_tensor[start:mid])
-        if self.store_feature_tensor is not None:
-            # [n_stores, n_store_features] → [window_lags, n_stores, n_store_features]
-            store_features_expanded = self.store_feature_tensor.unsqueeze(0).expand(
-                self.window_lags, -1, -1
-            )
-            parts.append(store_features_expanded)
-        if self.holiday_tensor is not None:
-            parts.append(self.holiday_tensor[start:mid])
-        if len(parts) == 1:
-            return parts[0], self.sales_tensor[mid:end]
-        return (
-            torch.cat(parts, dim=-1),  # type: ignore[attr-defined]
-            self.sales_tensor[mid:end],
-        )
+
+        x = torch.cat(self._build_window_parts(start, mid), dim=-1)  # type: ignore[attr-defined]
+        if self.flatten_output:
+            x = x.flatten(-2)
+
+        return x, self.sales_tensor[mid:end]
 
     def __len__(self) -> int:
         """Number of stride-1 sliding windows; excludes the final output_lags days."""
@@ -551,415 +564,30 @@ class StoreData(Dataset):
             return 0
         return self.holiday_tensor.shape[2]
 
-    def __repr__(self) -> str:
-        T, n_stores, n_families = self.sales_tensor.shape
-        n_promo = n_families if self.promotion_tensor is not None else 0
-        n_input = (
-            n_families
+    @property
+    def n_input_channels(self) -> int:
+        """Size of the feature axis in __getitem__ input: [T, n_stores, n_families, n_input_channels]."""
+        return (
+            1  # sales
+            + (1 if self.promotion_tensor is not None else 0)
             + self.n_date_features
             + (1 if self.include_oil else 0)
-            + n_promo
             + self.n_store_features
             + self.n_holiday_features
         )
+
+    def __repr__(self) -> str:
+        T, n_stores, n_families = self.sales_tensor.shape
+        if self.flatten_output:
+            input_shape = f"[window, {n_stores}, {n_families * self.n_input_channels}]"
+        else:
+            input_shape = f"[window, {n_stores}, {n_families}, {self.n_input_channels}]"
         return (
-            f"StoreData(T={T}, n_stores={n_stores}, "
-            f"n_families={n_families}, n_date_features={self.n_date_features}, "
+            f"StoreData(T={T}, n_stores={n_stores}, n_families={n_families}, "
+            f"input_shape={input_shape}, "
+            f"n_date_features={self.n_date_features}, "
             f"include_oil={self.include_oil}, n_store_features={self.n_store_features}, "
             f"n_holiday_features={self.n_holiday_features}, "
-            f"n_input_features={n_input}, "
+            f"flatten_output={self.flatten_output}, "
             f"window_lags={self.window_lags}, output_lags={self.output_lags})"
         )
-
-
-class MSLELoss(nn.Module):
-    """Mean Squared Logarithmic Error loss.
-
-    Computes MSE(log(1 + input), log(1 + target)), which is the competition
-    metric (RMSLE) squared. Use sqrt on the output to recover RMSLE.
-    Inputs must be non-negative; log1p is used for numerical stability near zero.
-    """
-
-    def __init__(self, reduction: str = "mean") -> None:
-        super().__init__()
-        self._mse_loss = nn.MSELoss(reduction=reduction)
-
-    def forward(self, input: Tensor, target: Tensor) -> Tensor:
-        return self._mse_loss(torch.log1p(input), torch.log1p(target))  # type: ignore[attr-defined]
-
-
-class Trainer:
-    """Generic supervised trainer with mlflow logging and checkpoint support.
-
-    Runs train/val loops, logs metrics to the active mlflow run, and saves
-    state-dict checkpoints as mlflow artifacts. Handles MPS, CUDA, and CPU
-    devices; memory stats are reported only when the backend supports them.
-    """
-
-    def __init__(
-        self,
-        model: nn.Module,
-        device: torch.device,
-        train_loader: DataLoader[Tensor],
-        val_loader: DataLoader[Tensor],
-        learning_rate: float = 1e-3,
-        loss_func: nn.Module | None = None,
-        save_checkpoints: bool = True,
-        log_metrics: bool = True,
-    ) -> None:
-        self.device: torch.device = device
-        self.model = model.to(device)
-        self.optim = AdamW(model.parameters(), lr=learning_rate)
-        self.loss_func = loss_func or MSLELoss()
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.save_checkpoints = save_checkpoints
-        self.log_metrics = log_metrics
-
-    def train(self, epochs: int, save_every_n_epochs: int | None = None) -> float:
-        """Run the full training loop for `epochs` epochs.
-
-        Learning rate follows a cosine annealing schedule from the initial
-        learning_rate down to ~0 over the course of the run, so `epochs` sets the
-        schedule's period in addition to the loop length.
-
-        Args:
-            epochs: total number of passes over the training set.
-            save_every_n_epochs: if set, save a periodic checkpoint every N epochs
-                in addition to the best-val checkpoint saved automatically.
-
-        Returns:
-            Best validation loss observed across all epochs.
-        """
-        scheduler = CosineAnnealingLR(self.optim, T_max=epochs)
-        progress_bar = tqdm(range(epochs))
-        digits = math.ceil(math.log10(epochs))
-        train_loss = torch.nan
-        val_loss = torch.nan
-        best_val_loss = torch.inf
-        for epoch_idx in progress_bar:
-            progress_bar.set_description(f"T: {train_loss:.4f} | V: {val_loss:.4f}")
-            train_loss = self.train_loop(epoch_idx).item()
-            progress_bar.set_description(f"T: {train_loss:.4f} | V: {val_loss:.4f}")
-            val_loss = self.val_loop(epoch_idx).item()
-            progress_bar.set_description(f"T: {train_loss:.4f} | V: {val_loss:.4f}")
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                if self.save_checkpoints:
-                    progress_bar.set_description("saving best...")
-                    self._checkpoint("best_model")
-                if self.log_metrics:
-                    mlflow.set_tag("best_epoch", epoch_idx)
-            if (
-                save_every_n_epochs
-                and epoch_idx % save_every_n_epochs == 0
-                and self.save_checkpoints
-            ):
-                progress_bar.set_description("saving periodic...")
-                self._checkpoint(f"epoch_{epoch_idx:0{digits}}")
-            if self.log_metrics:
-                mlflow.log_metrics(
-                    {"lr": float(scheduler.get_last_lr()[0])}, step=epoch_idx
-                )
-            scheduler.step()
-        return best_val_loss
-
-    def train_loop(self, epoch_idx: int) -> Tensor:
-        """One pass over the training set; returns the loss of the last batch."""
-        loss = torch.tensor(torch.nan, device=self.device)
-        start_time = time.perf_counter()
-        n_samples = 0
-        for batch_X, batch_y in self.train_loader:
-            self.optim.zero_grad()
-            loss = self._run_loss(batch_X.to(self.device), batch_y.to(self.device))
-            loss.backward()
-            self.optim.step()
-            n_samples += batch_X.shape[0]
-        self._synchronize()
-        elapsed = time.perf_counter() - start_time
-        metrics: dict[str, float] = {
-            "train_loss": loss.item(),
-            "sample_rate": n_samples / elapsed,
-        }
-        mem = self._allocated_memory_gb()
-        if mem is not None:
-            metrics["mem_allocated_gb"] = mem
-        if self.log_metrics:
-            mlflow.log_metrics(metrics, step=epoch_idx)
-        return loss
-
-    @torch.inference_mode()
-    def val_loop(self, epoch_idx: int) -> Tensor:
-        """Average loss over the validation set."""
-        loss = torch.tensor(0.0, device=self.device)
-        n_batches = 0
-        for batch_X, batch_y in self.val_loader:
-            loss += self._run_loss(batch_X.to(self.device), batch_y.to(self.device))
-            n_batches += 1
-        loss /= n_batches
-        if self.log_metrics:
-            mlflow.log_metrics({"val_loss": loss.item()}, step=epoch_idx)
-        return loss
-
-    def _run_loss(self, batch_X: Tensor, batch_y: Tensor) -> Tensor:
-        return self.loss_func(self.model(batch_X), batch_y)
-
-    def _checkpoint(self, name: str) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "state_dict.pt"
-            torch.save(self.model.state_dict(), path)
-            mlflow.log_artifact(str(path), artifact_path=f"checkpoints/{name}")
-
-    def _synchronize(self) -> None:
-        if self.device.type == "mps":
-            torch.mps.synchronize()
-        elif self.device.type == "cuda":
-            torch.cuda.synchronize()
-
-    def _allocated_memory_gb(self) -> float | None:
-        if self.device.type == "mps":
-            return torch.mps.current_allocated_memory() / 1e9
-        if self.device.type == "cuda":
-            return torch.cuda.memory_allocated(self.device) / 1e9
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Device / loader utilities
-# ---------------------------------------------------------------------------
-
-
-def get_device() -> torch.device:
-    """Return MPS if available, else CPU."""
-    return (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
-
-
-def make_loaders(
-    store_data: StoreData,
-    split: float,
-    batch_size: int,
-) -> tuple[DataLoader[Tensor], DataLoader[Tensor]]:
-    """Split StoreData into train/val DataLoaders.
-
-    Args:
-        store_data: dataset to split.
-        split: fraction of windows used for training; must be in (0, 1).
-        batch_size: batch size for both loaders.
-
-    Returns:
-        (train_loader, val_loader) — train loader shuffles, val does not.
-    """
-    if not (0.0 < split < 1.0):
-        raise ValueError(f"split must be in (0, 1), got {split}")
-    split_loc = int(len(store_data) * split)
-    train_loader = DataLoader[Tensor](
-        Subset(store_data, range(0, split_loc)),
-        batch_size=batch_size,
-        shuffle=True,
-    )
-    val_loader = DataLoader[Tensor](
-        Subset(store_data, range(split_loc, len(store_data))),
-        batch_size=batch_size,
-    )
-    return train_loader, val_loader
-
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-
-
-class HoldLastValue(nn.Module):
-    """Baseline model that repeats the last observed time step as the forecast.
-
-    Requires no training. For each sample in a batch, the final input step is
-    tiled across all output steps. The resulting forecast is constant in time,
-    making it a useful sanity-check lower bound for more complex models.
-
-    Input shape:  (batch, seq_len, n_stores, n_families)
-    Output shape: (batch, n_output_steps, n_stores, n_families)
-    """
-
-    def __init__(self, n_output_steps: int) -> None:
-        """
-        Args:
-            n_output_steps: Number of future time steps to predict.
-        """
-        super().__init__()
-        self.n_output_steps = n_output_steps
-
-    def forward(self, input_sequence: Tensor) -> Tensor:
-        """Tile the last time step across the output horizon.
-
-        Args:
-            input_sequence: Shape (batch, seq_len, n_stores, n_families).
-
-        Returns:
-            Tensor of shape (batch, n_output_steps, n_stores, n_families)
-            with the last observed value repeated at every output step.
-        """
-        last_step = input_sequence[:, -1:, :, :]
-        return last_step.expand(-1, self.n_output_steps, -1, -1)
-
-
-class StoreSalesTransformer(nn.Module):
-    """Transformer encoder-decoder for multi-step store sales forecasting.
-
-    Maps an input window of shape [batch, window_lags, n_stores, n_families]
-    to a prediction window of shape [batch, output_lags, n_stores, n_families].
-    The spatial dimensions (store x family) are flattened into a single feature
-    vector per time step and projected into d_model before the transformer.
-    """
-
-    def __init__(
-        self,
-        n_stores: int,
-        n_families: int,
-        n_output_steps: int,
-        d_model: int = 128,
-        nhead: int = 4,
-    ) -> None:
-        super().__init__()
-        embedding_size = n_stores * n_families
-        self.embedding_size = embedding_size
-        self.n_output_steps = n_output_steps
-        self.input_transform = nn.Linear(embedding_size, d_model)
-        self.output_transform = nn.Linear(d_model, embedding_size)
-        self.transformer = nn.Transformer(
-            d_model=d_model,
-            nhead=nhead,
-            batch_first=True,
-        )
-        self.output_relu = nn.ReLU()
-        self._n_stores = n_stores
-        self._n_families = n_families
-
-    def forward(self, input: Tensor) -> Tensor:
-        """
-        Args:
-            input: [batch, window_lags, n_stores, n_families]
-        Returns:
-            [batch, n_output_steps, n_stores, n_families]
-        """
-        input_internal = self.input_transform(input.flatten(-2))
-        tgt_internal = torch.zeros(
-            input_internal.shape[0],
-            self.n_output_steps,
-            self.transformer.d_model,
-            dtype=input_internal.dtype,
-            device=input_internal.device,
-        )
-        output_internal = self.transformer(input_internal, tgt_internal)
-        out_shape = (-1, self.n_output_steps, self._n_stores, self._n_families)
-        return self.output_relu(
-            self.output_transform(output_internal).reshape(out_shape)
-        )
-
-
-class PoolingMode(enum.StrEnum):
-    """How to collapse the sequence dimension after the TransformerEncoder.
-
-    ALL:  flatten all timestep embeddings into one long vector.
-    LAST: take only the final timestep embedding.
-    """
-
-    ALL = enum.auto()
-    LAST = enum.auto()
-
-    @staticmethod
-    def get_module(pooling_mode: PoolingMode) -> nn.Module:
-        match pooling_mode:
-            case PoolingMode.ALL:
-                return nn.Flatten(-2)
-            case PoolingMode.LAST:
-                return GetLastIndex()
-
-    @staticmethod
-    def parse(input_string: str) -> PoolingMode:
-        return PoolingMode._value2member_map_[input_string]  # type: ignore
-
-
-class StoreSalesEncoderOnly(nn.Module):
-    """Encoder-only Transformer that maps a sales history window to a multi-step forecast.
-
-    Input shape:  (batch, seq_len, n_stores, n_families)
-    Output shape: (batch, n_output_steps, n_stores, n_families)
-
-    The (n_stores x n_families) feature plane is flattened and linearly projected into
-    d_model before being passed through the Transformer encoder. All encoder outputs are
-    then flattened and projected to the full output horizon in one shot (no autoregression).
-    """
-
-    def __init__(
-        self,
-        n_stores: int,
-        n_families: int,
-        n_output_steps: int,
-        d_model: int = 64,
-        nhead: int = 2,
-        num_layers: int = 2,
-        max_seq_length: int = 512,
-        pooling_mode: PoolingMode = PoolingMode.ALL,
-        dim_feedforward: int = 256,
-    ) -> None:
-        """Build the encoder-only model.
-
-        Args:
-            n_stores: Number of distinct stores in the dataset.
-            n_families: Number of product families per store.
-            n_output_steps: Forecast horizon (number of future time steps to predict).
-            d_model: Transformer embedding dimension. Must be divisible by nhead.
-            nhead: Number of attention heads.
-            num_layers: Number of stacked TransformerEncoderLayer blocks.
-            max_seq_length: Upper bound on input sequence length passed to PositionalEncoding.
-            pooling_mode: How to collapse the sequence dimension after the encoder.
-                ALL flattens all timestep embeddings; LAST takes only the final one.
-            dim_feedforward: Width of the FFN sublayer inside each TransformerEncoderLayer.
-                PyTorch default is 2048; for d_model=64 something in [128, 512] is typical.
-        """
-        super().__init__()
-        self.n_stores = n_stores
-        self.n_families = n_families
-        self.n_output_steps = n_output_steps
-        models = OrderedDict[str, nn.Module](
-            [
-                ("input_flatten", nn.Flatten(-2)),
-                ("input_proj", nn.LazyLinear(d_model)),
-                ("pos_enc", PositionalEncoding(d_model, max_length=max_seq_length)),
-                (
-                    "encoder",
-                    nn.TransformerEncoder(
-                        nn.TransformerEncoderLayer(
-                            d_model,
-                            nhead,
-                            dim_feedforward=dim_feedforward,
-                            batch_first=True,
-                        ),
-                        num_layers=num_layers,
-                    ),
-                ),
-                ("pooling", PoolingMode.get_module(pooling_mode)),
-                ("output_proj", nn.LazyLinear(n_stores * n_families * n_output_steps)),
-                (
-                    "output_unflatten",
-                    nn.Unflatten(-1, (n_output_steps, n_stores, n_families)),
-                ),
-                ("ReLU", nn.ReLU()),
-            ]
-        )
-        self.sequence = nn.Sequential(models)
-
-    def forward(self, input_sequence: Tensor) -> Tensor:
-        """Run the full encoder-only forward pass.
-
-        Args:
-            input_sequence: Shape (batch, seq_len, n_stores, n_families).
-
-        Returns:
-            Forecast tensor of shape (batch, n_output_steps, n_stores, n_families).
-        """
-        return self.sequence(input_sequence)

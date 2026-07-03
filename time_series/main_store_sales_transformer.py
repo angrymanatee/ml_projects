@@ -12,8 +12,8 @@ import torch
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
+from common.modules import MSLELoss
 from time_series.store_sales import (
-    MSLELoss,
     StoreData,
     StoreSalesTransformer,
     Trainer,

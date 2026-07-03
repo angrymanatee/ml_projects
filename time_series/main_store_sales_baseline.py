@@ -18,7 +18,8 @@ from torch.utils.data import DataLoader, Subset
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from time_series.store_sales import HoldLastValue, MSLELoss, StoreData
+from common.modules import MSLELoss
+from time_series.store_sales import HoldLastValue, StoreData
 from time_series.store_sales_viz import StoreSalesAnalyzer
 
 # ---------------------------------------------------------------------------

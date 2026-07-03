@@ -18,10 +18,10 @@ from torch.utils.data import DataLoader
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
+from common.modules import MSLELoss
 from time_series.store_sales import (
     HOLIDAY_FEATURE_COLS,
     STORE_FEATURE_COLS,
-    MSLELoss,
     PoolingMode,
     StoreData,
     StoreSalesEncoderOnly,

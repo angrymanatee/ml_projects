@@ -9,8 +9,9 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader, TensorDataset
 
 import mlflow
+from common.modules import MSLELoss
 from time_series.main_store_sales_transformer import StoreSalesTransformer
-from time_series.store_sales import MSLELoss, Trainer
+from time_series.store_sales import Trainer
 
 CPU = torch.device("cpu")
 

@@ -5,9 +5,9 @@ import pandas as pd
 import pytest
 import torch
 
+from common.modules import MSLELoss
 from time_series.store_sales import (
     EarthquakeEncoding,
-    MSLELoss,
     StoreData,
 )
 
@@ -68,7 +68,7 @@ def test_repr(ds: StoreData) -> None:
 def test_item_shapes(ds: StoreData) -> None:
     x, y = ds[0]
     _, num_stores, num_families = ds.sales_tensor.shape
-    assert x.shape == (ds.window_lags, num_stores, num_families + ds.n_date_features)
+    assert x.shape == (ds.window_lags, num_stores, num_families, ds.n_input_channels)
     assert y.shape == (ds.output_lags, num_stores, num_families)
 
 
@@ -126,7 +126,11 @@ def test_include_onpromotion_adds_families(mock_data_dir: Path) -> None:
         "earthquake_encoding": None,
     }
     ds_base = StoreData(
-        window_lags=1, output_lags=1, data_dir=mock_data_dir, **no_dates
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        include_onpromotion=False,
+        **no_dates,
     )
     ds_promo = StoreData(
         window_lags=1,
@@ -137,15 +141,15 @@ def test_include_onpromotion_adds_families(mock_data_dir: Path) -> None:
     )
     x_base, _ = ds_base[0]
     x_promo, y_promo = ds_promo[0]
-    assert x_promo.shape[-1] == x_base.shape[-1] + len(FAMILIES)
+    assert x_promo.shape[-1] == x_base.shape[-1] + 1
     assert y_promo.shape[-1] == len(FAMILIES)
 
 
-def test_exclude_onpromotion_default(mock_data_dir: Path) -> None:
+def test_include_onpromotion_default(mock_data_dir: Path) -> None:
     ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
-    assert ds.promotion_tensor is None
+    assert ds.promotion_tensor is not None
     x, _ = ds[0]
-    assert x.shape[-1] == len(FAMILIES) + ds.n_date_features
+    assert x.shape[-1] == ds.n_input_channels
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +306,7 @@ def test_item_input_includes_date_features(mock_data_dir: Path) -> None:
     ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
     x, y = ds[0]
     _, n_stores, n_families = ds.sales_tensor.shape
-    assert x.shape == (1, n_stores, n_families + ds.n_date_features)
+    assert x.shape == (1, n_stores, n_families, ds.n_input_channels)
     assert y.shape == (1, n_stores, n_families)
 
 
@@ -314,10 +318,14 @@ def test_item_no_date_features_matches_sales_shape(mock_data_dir: Path) -> None:
         date_features=False,
         payday_features=False,
         earthquake_encoding=None,
+        include_oil=False,
+        include_onpromotion=False,
+        store_feature_cols=None,
+        holiday_features=None,
     )
     x, y = ds[0]
     _, n_stores, n_families = ds.sales_tensor.shape
-    assert x.shape == (1, n_stores, n_families)
+    assert x.shape == (1, n_stores, n_families, 1)
     assert y.shape == (1, n_stores, n_families)
 
 
@@ -332,8 +340,8 @@ def test_date_features_tensor_shape(mock_data_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_oil_tensor_none_by_default(ds: StoreData) -> None:
-    assert ds.oil_tensor is None
+def test_oil_tensor_present_by_default(ds: StoreData) -> None:
+    assert ds.oil_tensor is not None
 
 
 def test_oil_tensor_shape() -> None:
@@ -355,8 +363,7 @@ def test_item_shapes_with_oil_enabled(mock_data_dir: Path) -> None:
     )
     x, y = ds_oil[0]
     _, n_stores, n_families = ds_oil.sales_tensor.shape
-    # input: sales + date_features + 1 oil channel; target unchanged
-    assert x.shape == (1, n_stores, n_families + ds_oil.n_date_features + 1)
+    assert x.shape == (1, n_stores, n_families, ds_oil.n_input_channels)
     assert y.shape == (1, n_stores, n_families)
 
 
@@ -372,7 +379,7 @@ def test_item_shapes_oil_no_date_features(mock_data_dir: Path) -> None:
     )
     x, y = ds_oil[0]
     _, n_stores, n_families = ds_oil.sales_tensor.shape
-    assert x.shape == (1, n_stores, n_families + 1)
+    assert x.shape == (1, n_stores, n_families, ds_oil.n_input_channels)
     assert y.shape == (1, n_stores, n_families)
 
 
@@ -415,10 +422,10 @@ def test_store_feature_tensor_shape(mock_data_dir: Path) -> None:
     assert ds.store_feature_tensor.shape == (n_stores, 1)
 
 
-def test_store_feature_tensor_none_by_default(mock_data_dir: Path) -> None:
+def test_store_feature_tensor_present_by_default(mock_data_dir: Path) -> None:
     ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
-    assert ds.store_feature_tensor is None
-    assert ds.n_store_features == 0
+    assert ds.store_feature_tensor is not None
+    assert ds.n_store_features > 0
 
 
 def test_item_shapes_with_store_features(mock_data_dir: Path) -> None:
@@ -428,7 +435,11 @@ def test_item_shapes_with_store_features(mock_data_dir: Path) -> None:
         "earthquake_encoding": None,
     }
     ds_base = StoreData(
-        window_lags=1, output_lags=1, data_dir=mock_data_dir, **no_dates
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        store_feature_cols=None,
+        **no_dates,
     )
     ds_store = StoreData(
         window_lags=1,
@@ -458,8 +469,8 @@ def test_store_features_broadcast_across_time(mock_data_dir: Path) -> None:
         **no_dates,
     )
     x, _ = ds[0]
-    # store feature columns should be identical across time steps
-    assert (x[0, :, -1] == x[1, :, -1]).all()
+    # store feature columns should be identical across time steps (and families)
+    assert (x[0, :, :, -1] == x[1, :, :, -1]).all()
 
 
 def test_n_store_features_property(mock_data_dir: Path) -> None:
@@ -584,10 +595,10 @@ def test_setup_holiday_tensor_empty_returns_none(
     assert result is None
 
 
-def test_holiday_tensor_none_by_default(mock_data_dir: Path) -> None:
+def test_holiday_tensor_present_by_default(mock_data_dir: Path) -> None:
     ds = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
-    assert ds.holiday_tensor is None
-    assert ds.n_holiday_features == 0
+    assert ds.holiday_tensor is not None
+    assert ds.n_holiday_features > 0
 
 
 def test_setup_holiday_tensor_shape(
@@ -757,7 +768,11 @@ def test_holiday_channels_added_to_item(mock_data_dir: Path) -> None:
         "earthquake_encoding": None,
     }
     ds_base = StoreData(
-        window_lags=1, output_lags=1, data_dir=mock_data_dir, **no_dates
+        window_lags=1,
+        output_lags=1,
+        data_dir=mock_data_dir,
+        holiday_features=None,
+        **no_dates,
     )
     ds_hol = StoreData(
         window_lags=1,
