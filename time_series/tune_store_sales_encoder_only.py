@@ -11,10 +11,10 @@ Run with:
 
 import argparse
 
-import mlflow
 import optuna
 import torch
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval

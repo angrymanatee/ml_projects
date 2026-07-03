@@ -4,7 +4,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import mlflow
 import numpy as np
 import pandas as pd
 import torch
@@ -14,6 +13,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+import mlflow
 from common.paths import get_data_dir
 
 # Date of the 7.8-magnitude earthquake that struck coastal Ecuador.

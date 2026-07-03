@@ -13,11 +13,11 @@ import argparse
 import enum
 from collections import OrderedDict
 
-import mlflow
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import (
