@@ -20,8 +20,14 @@ import torch
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
-from time_series.store_sales import HOLIDAY_FEATURE_COLS, STORE_FEATURE_COLS, StoreData
+from time_series.main_store_sales_encoder_only import train_and_eval
+from time_series.store_sales import (
+    HOLIDAY_FEATURE_COLS,
+    STORE_FEATURE_COLS,
+    PoolingMode,
+    StoreData,
+    get_device,
+)
 
 
 @dataclasses.dataclass
@@ -168,11 +174,7 @@ def run_study(
     """
     resolved_arch = arch_config if arch_config is not None else _ARCH_CONFIG
 
-    device = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
+    device = get_device()
 
     n_configs = len(FEATURE_CONFIGS)
     # repeat_idx makes (feature_config_idx, repeat_idx) pairs distinct grid points;

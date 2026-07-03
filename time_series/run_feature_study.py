@@ -19,8 +19,11 @@ import argparse
 
 import optuna
 
-from time_series.main_store_sales_encoder_only import PoolingMode
-from time_series.store_sales import HOLIDAY_FEATURE_COLS, STORE_FEATURE_COLS
+from time_series.store_sales import (
+    HOLIDAY_FEATURE_COLS,
+    STORE_FEATURE_COLS,
+    PoolingMode,
+)
 from time_series.tune_store_sales_encoder_only import tune
 from time_series.tune_store_sales_features import run_study
 

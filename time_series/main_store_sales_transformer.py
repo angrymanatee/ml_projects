@@ -8,73 +8,19 @@ Run with:
 import argparse
 
 import torch
-from torch import Tensor, nn
-from torch.utils.data import DataLoader, Subset
 
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from time_series.store_sales import MSLELoss, StoreData, Trainer
+from time_series.store_sales import (
+    MSLELoss,
+    StoreData,
+    StoreSalesTransformer,
+    Trainer,
+    get_device,
+    make_loaders,
+)
 from time_series.store_sales_viz import StoreSalesAnalyzer
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
-
-class StoreSalesTransformer(nn.Module):
-    """Transformer encoder-decoder for multi-step store sales forecasting.
-
-    Maps an input window of shape [batch, window_lags, n_stores, n_families]
-    to a prediction window of shape [batch, output_lags, n_stores, n_families].
-    The spatial dimensions (store x family) are flattened into a single feature
-    vector per time step and projected into d_model before the transformer.
-    """
-
-    def __init__(
-        self,
-        n_stores: int,
-        n_families: int,
-        n_output_steps: int,
-        d_model: int = 128,
-        nhead: int = 4,
-    ) -> None:
-        super().__init__()
-        embedding_size = n_stores * n_families
-        self.embedding_size = embedding_size
-        self.n_output_steps = n_output_steps
-        self.input_transform = nn.Linear(embedding_size, d_model)
-        self.output_transform = nn.Linear(d_model, embedding_size)
-        self.transformer = nn.Transformer(
-            d_model=d_model,
-            nhead=nhead,
-            batch_first=True,
-        )
-        self.output_relu = nn.ReLU()
-        self._n_stores = n_stores
-        self._n_families = n_families
-
-    def forward(self, input: Tensor) -> Tensor:
-        """
-        Args:
-            input: [batch, window_lags, n_stores, n_families]
-        Returns:
-            [batch, n_output_steps, n_stores, n_families]
-        """
-        input_internal = self.input_transform(input.flatten(-2))
-        tgt_internal = torch.zeros(
-            input_internal.shape[0],
-            self.n_output_steps,
-            self.transformer.d_model,
-            dtype=input_internal.dtype,
-            device=input_internal.device,
-        )
-        output_internal = self.transformer(input_internal, tgt_internal)
-        out_shape = (-1, self.n_output_steps, self._n_stores, self._n_families)
-        return self.output_relu(
-            self.output_transform(output_internal).reshape(out_shape)
-        )
-
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -108,27 +54,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    device = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
-
+    device = get_device()
     store_data = StoreData(dtype=torch.float32)
-    n_stores = store_data.stores.shape[0]
-    n_families = store_data.families.size
-
-    split_loc = int(len(store_data) * args.split)
-    train_data = Subset(store_data, range(0, split_loc))
-    val_data = Subset(store_data, range(split_loc, len(store_data)))
-    train_loader = DataLoader[Tensor](
-        train_data, batch_size=args.batch_size, shuffle=True
-    )
-    val_loader = DataLoader[Tensor](val_data, batch_size=args.batch_size)
+    train_loader, val_loader = make_loaders(store_data, args.split, args.batch_size)
 
     model = StoreSalesTransformer(
-        n_stores=n_stores,
-        n_families=n_families,
+        n_stores=store_data.stores.shape[0],
+        n_families=store_data.families.size,
         n_output_steps=store_data.output_lags,
         d_model=args.d_model,
         nhead=args.nhead,

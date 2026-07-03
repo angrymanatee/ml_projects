@@ -27,8 +27,14 @@ import torch
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
-from time_series.store_sales import HOLIDAY_FEATURE_COLS, STORE_FEATURE_COLS, StoreData
+from time_series.main_store_sales_encoder_only import train_and_eval
+from time_series.store_sales import (
+    HOLIDAY_FEATURE_COLS,
+    STORE_FEATURE_COLS,
+    PoolingMode,
+    StoreData,
+    get_device,
+)
 
 _TUNE_EXPERIMENT_NAME = "StoreSales_EncoderOnly_Tune"
 _ROBUSTNESS_EXPERIMENT_NAME = "StoreSales_ArchRobustness"
@@ -302,11 +308,7 @@ def run_study(
         store_feature_cols=list(STORE_FEATURE_COLS),
         holiday_features=list(HOLIDAY_FEATURE_COLS),
     )
-    device = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
+    device = get_device()
 
     n_configs = len(selected)
     # repeat_idx makes (candidate_idx, repeat_idx) pairs distinct grid points; GridSampler

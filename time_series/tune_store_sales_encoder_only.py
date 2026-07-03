@@ -17,8 +17,14 @@ import torch
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from time_series.main_store_sales_encoder_only import PoolingMode, train_and_eval
-from time_series.store_sales import HOLIDAY_FEATURE_COLS, STORE_FEATURE_COLS, StoreData
+from time_series.main_store_sales_encoder_only import train_and_eval
+from time_series.store_sales import (
+    HOLIDAY_FEATURE_COLS,
+    STORE_FEATURE_COLS,
+    PoolingMode,
+    StoreData,
+    get_device,
+)
 
 
 def build_config(trial: optuna.Trial) -> dict:
@@ -127,11 +133,7 @@ def tune(
         include_oil=include_oil,
         include_onpromotion=include_onpromotion,
     )
-    device = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
+    device = get_device()
 
     mlflow.set_tracking_uri(TRACKING_URI)
     mlflow.set_experiment("StoreSales_EncoderOnly_Tune")

@@ -10,133 +10,26 @@ Run with:
 """
 
 import argparse
-import enum
-from collections import OrderedDict
 
 import torch
-from torch import Tensor, nn
-from torch.utils.data import DataLoader, Subset
+from torch import Tensor
+from torch.utils.data import DataLoader
 
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from common.modules import (
-    GetLastIndex,
-    PositionalEncoding,
-)
 from time_series.store_sales import (
     HOLIDAY_FEATURE_COLS,
     STORE_FEATURE_COLS,
     MSLELoss,
+    PoolingMode,
     StoreData,
+    StoreSalesEncoderOnly,
     Trainer,
+    get_device,
+    make_loaders,
 )
 from time_series.store_sales_viz import StoreSalesAnalyzer
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
-
-class PoolingMode(enum.StrEnum):
-    ALL = enum.auto()
-    LAST = enum.auto()
-
-    @staticmethod
-    def get_module(pooling_mode: PoolingMode) -> nn.Module:
-        match pooling_mode:
-            case PoolingMode.ALL:
-                return nn.Flatten(-2)
-            case PoolingMode.LAST:
-                return GetLastIndex()
-
-    @staticmethod
-    def parse(input_string: str) -> PoolingMode:
-        return PoolingMode._value2member_map_[input_string]  # type: ignore
-
-
-class StoreSalesEncoderOnly(nn.Module):
-    """Encoder-only Transformer that maps a sales history window to a multi-step forecast.
-
-    Input shape:  (batch, seq_len, n_stores, n_families)
-    Output shape: (batch, n_output_steps, n_stores, n_families)
-
-    The (n_stores x n_families) feature plane is flattened and linearly projected into
-    d_model before being passed through the Transformer encoder. All encoder outputs are
-    then flattened and projected to the full output horizon in one shot (no autoregression).
-    """
-
-    def __init__(
-        self,
-        n_stores: int,
-        n_families: int,
-        n_output_steps: int,
-        d_model: int = 64,
-        nhead: int = 2,
-        num_layers: int = 2,
-        max_seq_length: int = 512,
-        pooling_mode: PoolingMode = PoolingMode.ALL,
-        dim_feedforward: int = 256,
-    ) -> None:
-        """Build the encoder-only model.
-
-        Args:
-            n_stores: Number of distinct stores in the dataset.
-            n_families: Number of product families per store.
-            n_output_steps: Forecast horizon (number of future time steps to predict).
-            d_model: Transformer embedding dimension. Must be divisible by nhead.
-            nhead: Number of attention heads.
-            num_layers: Number of stacked TransformerEncoderLayer blocks.
-            max_seq_length: Upper bound on input sequence length passed to PositionalEncoding.
-            pooling_mode: How to collapse the sequence dimension after the encoder.
-                ALL flattens all timestep embeddings; LAST takes only the final one.
-            dim_feedforward: Width of the FFN sublayer inside each TransformerEncoderLayer.
-                PyTorch default is 2048; for d_model=64 something in [128, 512] is typical.
-        """
-        super().__init__()
-        self.n_stores = n_stores
-        self.n_families = n_families
-        self.n_output_steps = n_output_steps
-        models = OrderedDict[str, nn.Module](
-            [
-                ("input_flatten", nn.Flatten(-2)),
-                ("input_proj", nn.LazyLinear(d_model)),
-                # Normalization?
-                ("pos_enc", PositionalEncoding(d_model, max_length=max_seq_length)),
-                (
-                    "encoder",
-                    nn.TransformerEncoder(
-                        nn.TransformerEncoderLayer(
-                            d_model,
-                            nhead,
-                            dim_feedforward=dim_feedforward,
-                            batch_first=True,
-                        ),
-                        num_layers=num_layers,
-                    ),
-                ),
-                ("pooling", PoolingMode.get_module(pooling_mode)),
-                ("output_proj", nn.LazyLinear(n_stores * n_families * n_output_steps)),
-                (
-                    "output_unflatten",
-                    nn.Unflatten(-1, (n_output_steps, n_stores, n_families)),
-                ),
-                ("ReLU", nn.ReLU()),
-            ]
-        )
-        self.sequence = nn.Sequential(models)
-
-    def forward(self, input_sequence: Tensor) -> Tensor:
-        """Run the full encoder-only forward pass.
-
-        Args:
-            input_sequence: Shape (batch, seq_len, n_stores, n_families).
-
-        Returns:
-            Forecast tensor of shape (batch, n_output_steps, n_stores, n_families).
-        """
-        return self.sequence(input_sequence)
-
 
 # ---------------------------------------------------------------------------
 # Training
@@ -173,18 +66,7 @@ def train_and_eval(
     Returns:
         Tuple of (best_val_loss, trained_model, val_loader).
     """
-    if not (0.0 < split < 1.0):
-        raise ValueError(f"split must be in (0, 1), got {split}")
-    split_loc = int(len(store_data) * split)
-    train_loader = DataLoader[Tensor](
-        Subset(store_data, range(0, split_loc)),
-        batch_size=config["batch_size"],
-        shuffle=True,
-    )
-    val_loader = DataLoader[Tensor](
-        Subset(store_data, range(split_loc, len(store_data))),
-        batch_size=config["batch_size"],
-    )
+    train_loader, val_loader = make_loaders(store_data, split, config["batch_size"])
 
     model = StoreSalesEncoderOnly(
         n_stores=store_data.stores.shape[0],
@@ -304,11 +186,7 @@ def main() -> None:
     """Build dataset/model, run training, log results to MLflow, and produce validation plots."""
     args = parse_args()
 
-    device = (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
+    device = get_device()
 
     store_data = StoreData(
         dtype=torch.float32,

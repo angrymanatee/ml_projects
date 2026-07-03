@@ -12,53 +12,14 @@ Run with:
 import argparse
 
 import torch
-from torch import Tensor, nn
+from torch import nn
 from torch.utils.data import DataLoader, Subset
 
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
-from time_series.store_sales import MSLELoss, StoreData
+from time_series.store_sales import HoldLastValue, MSLELoss, StoreData
 from time_series.store_sales_viz import StoreSalesAnalyzer
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
-
-class HoldLastValue(nn.Module):
-    """Baseline model that repeats the last observed time step as the forecast.
-
-    Requires no training. For each sample in a batch, the final input step is
-    tiled across all output steps. The resulting forecast is constant in time,
-    making it a useful sanity-check lower bound for more complex models.
-
-    Input shape:  (batch, seq_len, n_stores, n_families)
-    Output shape: (batch, n_output_steps, n_stores, n_families)
-    """
-
-    def __init__(self, n_output_steps: int) -> None:
-        """
-        Args:
-            n_output_steps: Number of future time steps to predict. Controls
-                how many times the last observation is repeated.
-        """
-        super().__init__()
-        self.n_output_steps = n_output_steps
-
-    def forward(self, input_sequence: Tensor) -> Tensor:
-        """Tile the last time step across the output horizon.
-
-        Args:
-            input_sequence: Shape (batch, seq_len, n_stores, n_families).
-
-        Returns:
-            Tensor of shape (batch, n_output_steps, n_stores, n_families)
-            with the last observed value repeated at every output step.
-        """
-        last_step = input_sequence[:, -1:, :, :]
-        return last_step.expand(-1, self.n_output_steps, -1, -1)
-
 
 # ---------------------------------------------------------------------------
 # Evaluation
