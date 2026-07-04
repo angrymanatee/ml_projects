@@ -8,6 +8,7 @@ from .models import (
     HoldLastValue,
     PoolingMode,
     StoreSalesEncoderOnly,
+    StoreSalesFactorizedEncoder,
     StoreSalesTransformer,
 )
 from .runners import Trainer, get_device, make_loaders, run
@@ -19,6 +20,7 @@ __all__ = [
     "PoolingMode",
     "STORE_FEATURE_COLS",
     "StoreSalesEncoderOnly",
+    "StoreSalesFactorizedEncoder",
     "StoreSalesTransformer",
     "StoreData",
     "Trainer",

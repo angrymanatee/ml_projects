@@ -197,3 +197,108 @@ class StoreSalesEncoderOnly(nn.Module):
             Forecast tensor of shape (batch, n_output_steps, n_stores, n_families).
         """
         return self.sequence(input_sequence)
+
+
+class InputTransform(nn.Module):
+    def __init__(self, d_model: int, max_length: int) -> None:
+        super().__init__()
+        self.input_proj = nn.LazyLinear(d_model)
+        self.pos_encoding = PositionalEncoding(d_model, max_length=max_length)
+
+    def forward(self, input_sequence: Tensor) -> Tensor:
+        transposed = input_sequence.transpose(1, 3).flatten(0, 2)
+        projected = self.input_proj(transposed)
+        encoded = self.pos_encoding(projected)
+        return encoded
+
+
+class TimeToSF(nn.Module):
+    def __init__(self, n_stores: int, n_families: int, d_time: int, d_sf: int) -> None:
+        super().__init__()
+        self.n_sf = n_stores * n_families
+        self.d_time = d_time
+        self.d_sf = d_sf
+        self.proj = nn.Linear(d_time, d_sf)
+
+    def forward(self, input_sequence: Tensor) -> Tensor:
+        # input_sequence: [B*S*F, T, D] — pool over T to get [B*S*F, D]
+        mean_pooled = input_sequence.mean(1)
+        reshaped = mean_pooled.reshape(-1, self.n_sf, self.d_time)
+        return self.proj(reshaped)
+
+
+class StoreSalesFactorizedEncoder(nn.Module):
+    def __init__(
+        self,
+        n_stores: int,
+        n_families: int,
+        n_output_steps: int,
+        d_model_time: int = 64,
+        nhead_time: int = 2,
+        dim_feedforward_time: int = 256,
+        num_layers_time: int = 2,
+        d_model_sf: int = 64,
+        nhead_sf: int = 2,
+        dim_feedforward_sf: int = 256,
+        num_layers_sf: int = 2,
+        max_seq_length: int = 512,
+    ) -> None:
+        super().__init__()
+        self.n_stores = n_stores
+        self.n_families = n_families
+        self.n_output_steps = n_output_steps
+        models = OrderedDict[str, nn.Module](
+            [
+                # [B, T, S, F, X] -> [B * F * S, T, X]
+                ("input_proj", InputTransform(d_model_time, max_length=max_seq_length)),
+                # [B * F * S, T, X] -> [B * F * S, T, D_time]
+                (
+                    "time_encoder",
+                    nn.TransformerEncoder(
+                        nn.TransformerEncoderLayer(
+                            d_model_time,
+                            nhead_time,
+                            dim_feedforward=dim_feedforward_time,
+                            batch_first=True,
+                        ),
+                        num_layers=num_layers_time,
+                    ),
+                ),
+                # [B * F * S, T, D_time] ->  [B, F * S, D_sf]
+                (
+                    "time_to_storefam",
+                    TimeToSF(n_stores, n_families, d_model_time, d_model_sf),
+                ),
+                (
+                    "sf_encoder",
+                    nn.TransformerEncoder(
+                        nn.TransformerEncoderLayer(
+                            d_model_sf,
+                            nhead_sf,
+                            dim_feedforward=dim_feedforward_sf,
+                            batch_first=True,
+                        ),
+                        num_layers=num_layers_sf,
+                    ),
+                ),
+                ("pooling", nn.Flatten(-2)),
+                ("output_proj", nn.LazyLinear(n_stores * n_families * n_output_steps)),
+                (
+                    "output_unflatten",
+                    nn.Unflatten(-1, (n_output_steps, n_stores, n_families)),
+                ),
+                ("ReLU", nn.ReLU()),
+            ]
+        )
+        self.sequence = nn.Sequential(models)
+
+    def forward(self, input_sequence: Tensor) -> Tensor:
+        """Run the full encoder-only forward pass.
+
+        Args:
+            input_sequence: Shape (batch, seq_len, n_stores, n_families, n_features).
+
+        Returns:
+            Forecast tensor of shape (batch, n_output_steps, n_stores, n_families).
+        """
+        return self.sequence(input_sequence)
