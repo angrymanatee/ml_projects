@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from time_series.store_sales import StoreData, StoreSalesFactorizedEncoder
-from time_series.store_sales.models import InputTransform, TimeToSF
+from time_series.store_sales.models import InputProjection, TimeToSF
 
 N_STORES = 3
 N_FAMILIES = 4
@@ -35,7 +35,7 @@ def _rand_input(
 
 
 def test_input_transform_output_shape() -> None:
-    module = InputTransform(d_model=D_MODEL_TIME, max_length=512)
+    module = InputProjection(d_model=D_MODEL_TIME, max_length=512)
     x = _rand_input()
     out = module(x)
     # [B, T, S, F, X] -> [B*S*F, T, d_model]
@@ -43,7 +43,7 @@ def test_input_transform_output_shape() -> None:
 
 
 def test_input_transform_batch_size_one() -> None:
-    module = InputTransform(d_model=D_MODEL_TIME, max_length=512)
+    module = InputProjection(d_model=D_MODEL_TIME, max_length=512)
     x = _rand_input(batch=1)
     out = module(x)
     assert out.shape == (1 * N_STORES * N_FAMILIES, WINDOW_LAGS, D_MODEL_TIME)
@@ -82,6 +82,9 @@ def model() -> StoreSalesFactorizedEncoder:
         d_model_sf=D_MODEL_SF,
         nhead_sf=NHEAD,
         num_layers_sf=NUM_LAYERS,
+        # Small kernel/stride so Conv1d fits within N_FEATURES=5 in unit tests.
+        reduction_width=2,
+        reduction_stride=1,
     )
 
 
@@ -136,6 +139,10 @@ def test_dataloader_compatible(mock_data_dir: Path) -> None:
         d_model_sf=D_MODEL_SF,
         nhead_sf=NHEAD,
         num_layers_sf=1,
+        # reduction_width must be ≤ n_input_channels from StoreData (24 for mock data).
+        # Use small values so the test is fast.
+        reduction_width=2,
+        reduction_stride=1,
     )
     out = m(x)
     assert out.shape == (x.shape[0], 1, n_stores, n_families)

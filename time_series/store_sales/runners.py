@@ -73,6 +73,7 @@ class Trainer:
         loss_func: nn.Module | None = None,
         save_checkpoints: bool = True,
         log_metrics: bool = True,
+        autocast_dtype: torch.dtype | None = None,
     ) -> None:
         self.device: torch.device = device
         self.model = model.to(device)
@@ -82,6 +83,7 @@ class Trainer:
         self.val_loader = val_loader
         self.save_checkpoints = save_checkpoints
         self.log_metrics = log_metrics
+        self.autocast_dtype = autocast_dtype
 
     def train(self, epochs: int, save_every_n_epochs: int | None = None) -> float:
         """Run the full training loop for `epochs` epochs.
@@ -169,6 +171,11 @@ class Trainer:
         return loss
 
     def _run_loss(self, batch_X: Tensor, batch_y: Tensor) -> Tensor:
+        if self.autocast_dtype is not None:
+            with torch.autocast(
+                device_type=self.device.type, dtype=self.autocast_dtype
+            ):
+                return self.loss_func(self.model(batch_X), batch_y)
         return self.loss_func(self.model(batch_X), batch_y)
 
     def _checkpoint(self, name: str) -> None:

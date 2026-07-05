@@ -140,6 +140,30 @@ def test_different_inputs_produce_different_outputs(
 # ---------------------------------------------------------------------------
 
 
+def test_dataloader_compatible(mock_data_dir: Path) -> None:
+    """Batches from StoreData(flatten_output=True) should flow through the model without error."""
+    ds = StoreData(
+        window_lags=1, output_lags=1, data_dir=mock_data_dir, flatten_output=True
+    )
+    from torch.utils.data import DataLoader
+
+    loader: DataLoader = DataLoader(ds, batch_size=2)
+    x, _ = next(iter(loader))
+    n_stores = ds.stores.shape[0]
+    n_families = ds.families.size
+    m = StoreSalesEncoderOnly(
+        n_stores=n_stores,
+        n_families=n_families,
+        n_output_steps=1,
+        d_model=D_MODEL,
+        nhead=NHEAD,
+        num_layers=1,
+        pooling_mode=PoolingMode.LAST,
+    )
+    out = m(x)
+    assert out.shape == (x.shape[0], 1, n_stores, n_families)
+
+
 def test_train_and_eval_returns_finite_loss(mock_data_dir: Path) -> None:
     store_data = StoreData(
         window_lags=1, output_lags=1, data_dir=mock_data_dir, dtype=torch.float32
@@ -165,7 +189,7 @@ def test_train_and_eval_returns_finite_loss(mock_data_dir: Path) -> None:
         unittest.mock.patch.object(Trainer, "val_loop", return_value=fixed_loss),
         unittest.mock.patch.object(Trainer, "_checkpoint"),
     ):
-        val_loss, model, val_loader = train_and_eval(
+        val_loss, _model, _val_loader = train_and_eval(
             config=config,
             store_data=store_data,
             device=torch.device("cpu"),

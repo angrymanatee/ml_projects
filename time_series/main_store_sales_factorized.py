@@ -17,7 +17,7 @@ Run with:
 import argparse
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 import mlflow
@@ -49,7 +49,8 @@ def train_and_eval(
     save_every: int | None = None,
     save_checkpoints: bool = True,
     log_metrics: bool = True,
-) -> tuple[float, StoreSalesFactorizedEncoder, DataLoader[Tensor]]:
+    autocast_dtype: torch.dtype | None = None,
+) -> tuple[float, nn.Module, DataLoader[Tensor]]:
     """Build loaders and model from config, train, return results.
 
     Must be called inside an active mlflow.start_run() context.
@@ -66,6 +67,9 @@ def train_and_eval(
         save_every: checkpoint every N epochs.
         save_checkpoints: if False, skips all checkpoint writes.
         log_metrics: if False, skips all mlflow.log_metrics calls.
+        autocast_dtype: if set, wraps each forward pass in torch.autocast with this dtype.
+            Use torch.float16 on MPS — MPS matmul cannot accumulate float16 into a
+            float16 destination without autocast.
 
     Returns:
         Tuple of (best_val_loss, trained_model, val_loader).
@@ -95,6 +99,7 @@ def train_and_eval(
         loss_func=MSLELoss(),
         save_checkpoints=save_checkpoints,
         log_metrics=log_metrics,
+        autocast_dtype=autocast_dtype,
     )
     best_val_loss = trainer.train(epochs, save_every_n_epochs=save_every)
     return best_val_loss, model, val_loader
@@ -125,6 +130,13 @@ def parse_args() -> argparse.Namespace:
         help="train/val split fraction (default: 0.9)",
     )
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--window-lags",
+        type=int,
+        default=60,
+        metavar="T",
+        help="input window length in days (default: 60)",
+    )
 
     # Time encoder
     parser.add_argument("--d-model-time", type=int, default=64)
@@ -178,7 +190,8 @@ def main() -> None:
     device = get_device()
 
     store_data = StoreData(
-        dtype=torch.float32,
+        dtype=torch.float16,
+        window_lags=args.window_lags,
         include_oil=args.oil,
         include_onpromotion=args.onpromotion,
         store_feature_cols=args.store_features,
@@ -254,6 +267,7 @@ def main() -> None:
             epochs=args.epochs,
             split=args.split,
             save_every=args.save_every,
+            autocast_dtype=torch.float16,
         )
         StoreSalesAnalyzer(
             model=model,

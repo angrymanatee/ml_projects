@@ -45,6 +45,7 @@ def train_and_eval(
     save_every: int | None = None,
     save_checkpoints: bool = True,
     log_metrics: bool = True,
+    autocast_dtype: torch.dtype | None = None,
 ) -> tuple[float, StoreSalesEncoderOnly, DataLoader[Tensor]]:
     """Build loaders and model from config, train, return results.
 
@@ -62,6 +63,9 @@ def train_and_eval(
         save_every: checkpoint every N epochs.
         save_checkpoints: if False, skips all checkpoint writes. Set False during hyperparameter search.
         log_metrics: if False, skips all mlflow.log_metrics and mlflow.set_tag calls. Set False during hyperparameter search.
+        autocast_dtype: if set, wraps each forward pass in torch.autocast with this dtype.
+            Use torch.float16 on MPS instead of casting the model to float16 directly —
+            MPS matmul cannot accumulate float16 into a float16 destination without autocast.
 
     Returns:
         Tuple of (best_val_loss, trained_model, val_loader).
@@ -88,6 +92,7 @@ def train_and_eval(
         loss_func=MSLELoss(),
         save_checkpoints=save_checkpoints,
         log_metrics=log_metrics,
+        autocast_dtype=autocast_dtype,
     )
     best_val_loss = trainer.train(epochs, save_every_n_epochs=save_every)
     return best_val_loss, model, val_loader
@@ -100,7 +105,7 @@ def train_and_eval(
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for training hyperparameters and model config."""
-    parser = argparse.ArgumentParser(description="Train StoreSalesTransformer")
+    parser = argparse.ArgumentParser(description="Train StoreSalesEncoderOnly")
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument(
         "--save-every",
@@ -189,11 +194,12 @@ def main() -> None:
     device = get_device()
 
     store_data = StoreData(
-        dtype=torch.float32,
+        dtype=torch.float16,
         include_oil=args.oil,
         include_onpromotion=args.onpromotion,
         store_feature_cols=args.store_features,
         holiday_features=args.holiday_features,
+        flatten_output=True,
     )
 
     config = {
@@ -256,6 +262,7 @@ def main() -> None:
             epochs=args.epochs,
             split=args.split,
             save_every=args.save_every,
+            autocast_dtype=torch.float16,
         )
         StoreSalesAnalyzer(
             model=model,
