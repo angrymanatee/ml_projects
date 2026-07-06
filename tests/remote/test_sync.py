@@ -113,7 +113,7 @@ def test_push_data_rsync_failure_raises(
         push_data(target, config, "store-sales")
 
 
-def test_pull_results_calls_rsync_from_remote(
+def test_pull_results_export_import_pipeline(
     config: RunPodConfig,
     target: SSHTarget,
     tmp_path: Path,
@@ -122,11 +122,18 @@ def test_pull_results_calls_rsync_from_remote(
     monkeypatch.chdir(tmp_path)
     with patch("subprocess.run", return_value=_ok()) as mock_run:
         pull_results(target, config)
-    assert mock_run.called
-    cmd_str = " ".join(mock_run.call_args[0][0])
-    assert "mlruns" in cmd_str
-    # source must be remote (contains @), dest must be local
-    assert f"{target.user}@{target.host}" in cmd_str
+    assert mock_run.call_count == 3
+    all_cmds = [" ".join(mock_run.call_args_list[i][0][0]) for i in range(3)]
+    # Step 1: SSH to pod to run export-experiments
+    assert "export-experiments" in all_cmds[0]
+    assert f"{target.user}@{target.host}" in all_cmds[0]
+    # Step 2: rsync the export bundle from pod to local temp dir
+    assert "rsync" in all_cmds[1]
+    assert f"{target.user}@{target.host}" in all_cmds[1]
+    assert "mlflow-export" in all_cmds[1]
+    # Step 3: import-experiments into local file store
+    assert "import-experiments" in all_cmds[2]
+    assert "mlruns" in all_cmds[2]
 
 
 def test_pull_results_creates_local_dir(

@@ -48,7 +48,11 @@ def create_pod(config: RunPodConfig, *, name_suffix: str = "") -> str:
         RunPod pod ID string.
     """
     _init_sdk(config)
-    name = f"{config.pod_name_prefix}-{name_suffix}" if name_suffix else config.pod_name_prefix
+    name = (
+        f"{config.pod_name_prefix}-{name_suffix}"
+        if name_suffix
+        else config.pod_name_prefix
+    )
     pod = runpod_sdk.create_pod(
         name=name,
         image_name=config.docker_image,
@@ -121,7 +125,9 @@ def wait_for_running(
     elapsed = 0
     while elapsed < timeout:
         pod = runpod_sdk.get_pod(pod_id)
-        if pod.get("desiredStatus") == "RUNNING" and pod.get("runtime", {}).get("ports"):
+        if pod.get("desiredStatus") == "RUNNING" and pod.get("runtime", {}).get(
+            "ports"
+        ):
             return _extract_ssh_target(pod)
         time.sleep(_POLL_INTERVAL)
         elapsed += _POLL_INTERVAL

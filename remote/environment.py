@@ -5,6 +5,7 @@ from remote.ssh import SSHTarget, run_remote
 
 _REMOTE_DEPS = [
     "mlflow>=3.12.0",
+    "mlflow-export-import>=1.2.0",
     "optuna>=4.9.0",
     "pandas>=2.2.0,<3",
     "numpy>=2.4.6",

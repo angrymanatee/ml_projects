@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 from remote.config import RunPodConfig
-from remote.ssh import SSHTarget
+from remote.ssh import SSHTarget, run_remote
 
 _SOURCE_DIRS = ["time_series", "common"]
 _SOURCE_FILES = ["pyproject.toml"]
@@ -73,8 +74,47 @@ def push_data(target: SSHTarget, config: RunPodConfig, dataset: str) -> None:
 
 
 def pull_results(target: SSHTarget, config: RunPodConfig) -> None:
-    """Rsync mlruns/ from the remote pod back to the local machine."""
-    local_dir = Path(config.local_mlruns_dir)
-    local_dir.mkdir(exist_ok=True)
-    remote_source = f"{target.user}@{target.host}:{config.remote_mlruns_dir}/"
-    _run_rsync(remote_source, f"{config.local_mlruns_dir}/", target)
+    """Export MLflow runs from the remote pod and import them locally.
+
+    Uses mlflow-export-import to export all experiments from the remote
+    tracking server, rsync the bundle locally, then import into the local
+    file-store. Run IDs are remapped on import so there are no collisions
+    with existing local runs.
+    """
+    remote_export_dir = "/tmp/mlflow-export"
+    remote_mlflow_uri = f"http://localhost:{config.mlflow_port}"
+
+    run_remote(
+        target,
+        (
+            f"export-experiments"
+            f" --mlflow-tracking-uri {remote_mlflow_uri}"
+            f" --experiments '*'"
+            f" --output-dir {remote_export_dir}"
+        ),
+    )
+
+    local_mlruns = Path(config.local_mlruns_dir)
+    local_mlruns.mkdir(exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="mlflow-export-") as local_export_dir:
+        remote_source = f"{target.user}@{target.host}:{remote_export_dir}/"
+        _run_rsync(remote_source, f"{local_export_dir}/", target)
+
+        local_tracking_uri = local_mlruns.resolve().as_uri()
+        result = subprocess.run(
+            [
+                "import-experiments",
+                "--mlflow-tracking-uri",
+                local_tracking_uri,
+                "--input-dir",
+                local_export_dir,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"mlflow-export-import import failed (exit {result.returncode}):\n"
+                f"stderr: {result.stderr}"
+            )
