@@ -5,6 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from remote.cli import _normalize_train_command, app
+from remote.config import RunPodConfig
 
 runner = CliRunner()
 
@@ -24,9 +25,13 @@ def test_normalize_leaves_other_commands_intact() -> None:
 
 def test_normalize_warns_on_uv_in_middle(capsys: pytest.CaptureFixture) -> None:
     # should not strip, but warn
-    _normalize_train_command(["python", "-m", "uv", "something"])
-    # warning goes to stderr via typer.echo(..., err=True); capsys captures it
-    # just verify it doesn't raise
+    result = _normalize_train_command(["python", "-m", "uv", "something"])
+    # verify command is not stripped
+    assert result == ["python", "-m", "uv", "something"]
+    # verify warning is emitted to stderr
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "uv" in captured.err
 
 
 # --- pod subcommands ---
@@ -82,7 +87,10 @@ def test_run_full_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
     monkeypatch.chdir(tmp_path)
 
+    controlled_config = RunPodConfig(api_key="key", on_complete="terminate")
+
     with (
+        patch("remote.cli.load_config", return_value=controlled_config),
         patch("remote.cli.create_pod", return_value="pod1") as mock_create,
         patch("remote.cli.wait_for_running") as mock_wait,
         patch("remote.cli.wait_for_ssh"),
@@ -107,7 +115,10 @@ def test_run_leaves_pod_running_on_failure(
     monkeypatch.setenv("RUNPOD_API_KEY", "key")
     monkeypatch.chdir(tmp_path)
 
+    controlled_config = RunPodConfig(api_key="key", on_complete="terminate")
+
     with (
+        patch("remote.cli.load_config", return_value=controlled_config),
         patch("remote.cli.create_pod", return_value="pod1"),
         patch("remote.cli.wait_for_running") as mock_wait,
         patch("remote.cli.wait_for_ssh"),
