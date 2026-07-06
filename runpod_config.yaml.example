@@ -1,0 +1,22 @@
+# RunPod training configuration
+# Copy to runpod_config.yaml (gitignored) and fill in your values.
+# API key: never put here — always from env var RUNPOD_API_KEY
+#   Store: security add-generic-password -a $USER -s RUNPOD_API_KEY -w <key>
+#   Load in .zshrc: export RUNPOD_API_KEY=$(security find-generic-password -a $USER -s RUNPOD_API_KEY -w)
+
+gpu_type: "NVIDIA GeForce RTX 4090"
+gpu_count: 1
+cloud_type: "SECURE"          # SECURE (reliable) or COMMUNITY (cheaper)
+docker_image: "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+mlflow_cpu_image: "runpod/base:0.6.2-cpu"
+
+pod_name_prefix: "mlprojects"
+remote_project_dir: "/workspace/mlprojects"
+remote_data_dir: "/workspace/data"
+remote_mlruns_dir: "/workspace/mlruns"
+local_mlruns_dir: "mlruns"
+
+default_datasets: []          # e.g. ["store-sales-time-series-forecasting"]
+
+on_complete: "terminate"      # terminate | stop | keep
+mlflow_port: 5000
