@@ -21,12 +21,17 @@ NHEAD = 2
 NUM_LAYERS = 1
 
 
-def _rand_input(
+def _det_input(
     batch: int = BATCH,
     seq: int = WINDOW_LAGS,
     n_features: int = N_FEATURES,
+    offset: int = 0,
 ) -> torch.Tensor:
-    return torch.rand(batch, seq, N_STORES, N_FAMILIES, n_features)
+    """Return a deterministic tensor with sequential float values starting at offset."""
+    total = batch * seq * N_STORES * N_FAMILIES * n_features
+    return torch.arange(offset, offset + total, dtype=torch.float32).reshape(
+        batch, seq, N_STORES, N_FAMILIES, n_features
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +41,7 @@ def _rand_input(
 
 def test_input_transform_output_shape() -> None:
     module = InputProjection(d_model=D_MODEL_TIME, max_length=512)
-    x = _rand_input()
+    x = _det_input()
     out = module(x)
     # [B, T, S, F, X] -> [B*S*F, T, d_model]
     assert out.shape == (BATCH * N_STORES * N_FAMILIES, WINDOW_LAGS, D_MODEL_TIME)
@@ -44,7 +49,7 @@ def test_input_transform_output_shape() -> None:
 
 def test_input_transform_batch_size_one() -> None:
     module = InputProjection(d_model=D_MODEL_TIME, max_length=512)
-    x = _rand_input(batch=1)
+    x = _det_input(batch=1)
     out = module(x)
     assert out.shape == (1 * N_STORES * N_FAMILIES, WINDOW_LAGS, D_MODEL_TIME)
 
@@ -59,7 +64,10 @@ def test_time_to_sf_output_shape() -> None:
         n_stores=N_STORES, n_families=N_FAMILIES, d_time=D_MODEL_TIME, d_sf=D_MODEL_SF
     )
     # Input: [B*S*F, T, D_time]
-    x = torch.rand(BATCH * N_STORES * N_FAMILIES, WINDOW_LAGS, D_MODEL_TIME)
+    total = BATCH * N_STORES * N_FAMILIES * WINDOW_LAGS * D_MODEL_TIME
+    x = torch.arange(total, dtype=torch.float32).reshape(
+        BATCH * N_STORES * N_FAMILIES, WINDOW_LAGS, D_MODEL_TIME
+    )
     out = module(x)
     # Expected: [B, S*F, d_sf]
     assert out.shape == (BATCH, N_STORES * N_FAMILIES, D_MODEL_SF)
@@ -72,6 +80,7 @@ def test_time_to_sf_output_shape() -> None:
 
 @pytest.fixture(scope="module")
 def model() -> StoreSalesFactorizedEncoder:
+    torch.manual_seed(0)
     return StoreSalesFactorizedEncoder(
         n_stores=N_STORES,
         n_families=N_FAMILIES,
@@ -89,34 +98,41 @@ def model() -> StoreSalesFactorizedEncoder:
 
 
 def test_output_shape(model: StoreSalesFactorizedEncoder) -> None:
-    out = model(_rand_input())
+    out = model(_det_input())
     assert out.shape == (BATCH, OUTPUT_LAGS, N_STORES, N_FAMILIES)
 
 
 def test_output_shape_batch_size_one(model: StoreSalesFactorizedEncoder) -> None:
-    out = model(_rand_input(batch=1))
+    out = model(_det_input(batch=1))
     assert out.shape == (1, OUTPUT_LAGS, N_STORES, N_FAMILIES)
 
 
 def test_output_non_negative(model: StoreSalesFactorizedEncoder) -> None:
-    assert (model(_rand_input()) >= 0).all()
+    assert (model(_det_input()) >= 0).all()
 
 
 def test_no_nan_in_output(model: StoreSalesFactorizedEncoder) -> None:
-    assert not torch.isnan(model(_rand_input())).any()
+    assert not torch.isnan(model(_det_input())).any()
 
 
 def test_output_dtype_matches_input(model: StoreSalesFactorizedEncoder) -> None:
-    x = _rand_input().to(torch.float32)
+    x = _det_input().to(torch.float32)
     assert model(x).dtype == torch.float32
 
 
 def test_different_inputs_produce_different_outputs(
     model: StoreSalesFactorizedEncoder,
 ) -> None:
-    x = _rand_input()
-    x_shifted = x + 1.0
-    assert not torch.equal(model(x), model(x_shifted))
+    was_training = model.training
+    model.eval()
+    try:
+        total = BATCH * WINDOW_LAGS * N_STORES * N_FAMILIES * N_FEATURES
+        with torch.no_grad():
+            out_a = model(_det_input())
+            out_b = model(_det_input(offset=total))
+        assert not torch.equal(out_a, out_b)
+    finally:
+        model.train(was_training)
 
 
 # ---------------------------------------------------------------------------
