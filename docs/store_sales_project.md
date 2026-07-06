@@ -114,3 +114,85 @@ uv run python -m time_series.tune_store_sales_encoder_only --n-trials 40 --epoch
 - `git.py` — branch/SHA for MLflow tags
 - `model_registry.py` — `TRACKING_URI`
 - `modules.py` — `PositionalEncoding`, `GetLastIndex`
+
+---
+
+## Remote Training on RunPod
+
+See [RunPod deployment design](superpowers/specs/2026-07-05-runpod-deployment-design.md) for full design rationale.
+
+### Prerequisites
+
+1. RunPod account with SSH public key added in [RunPod Settings](https://www.runpod.io/console/user/settings)
+2. API key in macOS Keychain:
+   ```bash
+   security add-generic-password -a "$USER" -s "RUNPOD_API_KEY" -w "<your-key>"
+   ```
+3. Add to `~/.zshrc`:
+   ```bash
+   export RUNPOD_API_KEY=$(security find-generic-password -a "$USER" -s "RUNPOD_API_KEY" -w 2>/dev/null)
+   ```
+4. Copy and fill in config:
+   ```bash
+   cp runpod_config.yaml.example runpod_config.yaml
+   ```
+
+### Quick start — single run (fully automated)
+
+```bash
+uv run python -m remote run --dataset store-sales-time-series-forecasting \
+  -- python -m time_series.main_store_sales_encoder_only --epochs 200
+```
+
+### Manual workflow (fine-grained control)
+
+```bash
+# 1. Create pod
+POD_ID=$(uv run python -m remote pod create)
+
+# 2. Push code and data
+uv run python -m remote sync push-code $POD_ID
+uv run python -m remote sync push-data $POD_ID --dataset store-sales-time-series-forecasting
+
+# 3. Set up environment
+uv run python -m remote env setup $POD_ID
+uv run python -m remote env mlflow-start $POD_ID
+
+# 4. Train
+uv run python -m remote train $POD_ID -- python -m time_series.main_store_sales_encoder_only --epochs 200
+
+# 5. Pull results
+uv run python -m remote sync pull $POD_ID
+
+# 6. Clean up
+uv run python -m remote pod terminate $POD_ID
+```
+
+### Hyperparameter sweep (parallel pods, shared MLflow)
+
+```bash
+# 1. Start persistent MLflow pod
+MLFLOW_POD=$(uv run python -m remote sweep create-mlflow-pod)
+
+# 2. Run N parallel training pods
+uv run python -m remote sweep run \
+  --mlflow-pod $MLFLOW_POD --n-pods 4 \
+  --dataset store-sales-time-series-forecasting \
+  -- python -m time_series.tune_store_sales_encoder_only --n-trials 20 --epochs-per-trial 30
+
+# 3. Pull results and tear down
+uv run python -m remote sweep pull $MLFLOW_POD
+uv run python -m remote sweep teardown $MLFLOW_POD
+```
+
+### Remote deps group
+
+When adding non-torch Python packages to `pyproject.toml`, also add them to the
+`remote` dependency group so they are installed on RunPod pods:
+
+```toml
+[dependency-groups]
+remote = [
+    # add new non-torch packages here
+]
+```
