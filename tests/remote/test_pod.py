@@ -4,8 +4,9 @@ import pytest
 
 from remote.config import RunPodConfig
 from remote.pod import (
-    PodInfo,
+    create_mlflow_pod,
     create_pod,
+    get_pod,
     get_ssh_target,
     list_pods,
     stop_pod,
@@ -62,6 +63,16 @@ def test_create_pod_passes_gpu_type(config: RunPodConfig) -> None:
     assert "22/tcp" in kwargs["ports"]
 
 
+def test_create_mlflow_pod_returns_id(config: RunPodConfig) -> None:
+    with patch("remote.pod.runpod_sdk") as mock_sdk:
+        mock_sdk.create_pod.return_value = {"id": "mlflow-pod-1"}
+        pod_id = create_mlflow_pod(config)
+    assert pod_id == "mlflow-pod-1"
+    # verify mlflow port is included in exposed ports
+    kwargs = mock_sdk.create_pod.call_args[1]
+    assert str(config.mlflow_port) in kwargs["ports"]
+
+
 def test_wait_for_running_returns_ssh_target(config: RunPodConfig) -> None:
     with patch("remote.pod.runpod_sdk") as mock_sdk:
         mock_sdk.get_pod.return_value = _running_pod()
@@ -73,8 +84,7 @@ def test_wait_for_running_returns_ssh_target(config: RunPodConfig) -> None:
 
 def test_wait_for_running_polls_until_running(config: RunPodConfig) -> None:
     not_yet = {"id": "x", "desiredStatus": "CREATED", "runtime": {"ports": []}}
-    with patch("remote.pod.runpod_sdk") as mock_sdk, \
-         patch("remote.pod.time.sleep"):
+    with patch("remote.pod.runpod_sdk") as mock_sdk, patch("remote.pod.time.sleep"):
         mock_sdk.get_pod.side_effect = [not_yet, not_yet, _running_pod()]
         target = wait_for_running(config, "x")
     assert mock_sdk.get_pod.call_count == 3
@@ -83,8 +93,7 @@ def test_wait_for_running_polls_until_running(config: RunPodConfig) -> None:
 
 def test_wait_for_running_times_out(config: RunPodConfig) -> None:
     not_running = {"id": "x", "desiredStatus": "CREATED", "runtime": {"ports": []}}
-    with patch("remote.pod.runpod_sdk") as mock_sdk, \
-         patch("remote.pod.time.sleep"):
+    with patch("remote.pod.runpod_sdk") as mock_sdk, patch("remote.pod.time.sleep"):
         mock_sdk.get_pod.return_value = not_running
         with pytest.raises(TimeoutError):
             wait_for_running(config, "x", timeout=10)
@@ -104,6 +113,15 @@ def test_get_ssh_target_raises_when_no_port(config: RunPodConfig) -> None:
         mock_sdk.get_pod.return_value = pod
         with pytest.raises(RuntimeError, match="No public SSH port"):
             get_ssh_target(config, "x")
+
+
+def test_get_pod_returns_raw_dict(config: RunPodConfig) -> None:
+    pod_data = {"id": "abc123", "desiredStatus": "RUNNING", "runtime": {"ports": []}}
+    with patch("remote.pod.runpod_sdk") as mock_sdk:
+        mock_sdk.get_pod.return_value = pod_data
+        result = get_pod(config, "abc123")
+    assert result == pod_data
+    mock_sdk.get_pod.assert_called_once_with("abc123")
 
 
 def test_list_pods(config: RunPodConfig) -> None:
