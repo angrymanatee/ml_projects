@@ -1,3 +1,3 @@
-from remote.cli import app  # type: ignore[import-not-found]
+from remote.cli import app
 
 app()
