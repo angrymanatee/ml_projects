@@ -48,3 +48,13 @@ def test_load_config_overrides_defaults(
     assert config.on_complete == "stop"
     assert config.mlflow_port == 5001
     assert config.default_datasets == ["store-sales"]
+
+
+def test_load_config_raises_on_unknown_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RUNPOD_API_KEY", "key")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("gpu_typ: 'NVIDIA A100'\ninvalid_field: true\n")
+    with pytest.raises(ValueError, match="Unknown keys"):
+        load_config(config_file)

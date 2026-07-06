@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -52,9 +53,15 @@ def load_config(config_path: Path = Path("runpod_config.yaml")) -> RunPodConfig:
             "Load it in .zshrc: export RUNPOD_API_KEY=$(security find-generic-password -a $USER -s RUNPOD_API_KEY -w)"
         )
 
-    data: dict = {}
+    data: dict[str, Any] = {}
     if config_path.exists():
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
+
+    valid_fields = {f.name for f in fields(RunPodConfig)}
+    valid_fields.discard("api_key")  # api_key comes from env, not YAML
+    unknown = set(data) - valid_fields
+    if unknown:
+        raise ValueError(f"Unknown keys in runpod_config.yaml: {unknown}")
 
     return RunPodConfig(api_key=api_key, **data)
