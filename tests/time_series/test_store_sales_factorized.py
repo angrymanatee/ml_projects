@@ -114,7 +114,9 @@ def test_output_dtype_matches_input(model: StoreSalesFactorizedEncoder) -> None:
 def test_different_inputs_produce_different_outputs(
     model: StoreSalesFactorizedEncoder,
 ) -> None:
-    assert not torch.equal(model(_rand_input()), model(_rand_input()))
+    x = _rand_input()
+    x_shifted = x + 1.0
+    assert not torch.equal(model(x), model(x_shifted))
 
 
 # ---------------------------------------------------------------------------
