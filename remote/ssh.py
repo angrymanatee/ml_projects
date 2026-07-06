@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -47,8 +48,8 @@ def run_remote(
         CompletedProcess with stdout and stderr captured.
     """
     if env:
-        env_prefix = " ".join(f"{k}={v}" for k, v in env.items())
-        command = f"{env_prefix} {command}"
+        env_exports = "; ".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
+        command = f"{env_exports}; {command}"
 
     result = subprocess.run(
         ["ssh", *target.ssh_opts, target.ssh_destination(), command],

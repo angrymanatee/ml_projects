@@ -54,7 +54,16 @@ def test_run_remote_injects_env(target: SSHTarget) -> None:
     with patch("subprocess.run", return_value=_success()) as mock_run:
         run_remote(target, "python -m app", env={"FOO": "bar"})
     cmd = mock_run.call_args[0][0]
-    assert any("FOO=bar" in arg for arg in cmd)
+    assert any("export FOO=bar" in arg for arg in cmd)
+
+
+def test_run_remote_env_exported_before_compound_command(target: SSHTarget) -> None:
+    with patch("subprocess.run", return_value=_success()) as mock_run:
+        run_remote(target, "cd /tmp && echo hi", env={"FOO": "bar"})
+    cmd = mock_run.call_args[0][0]
+    full_command = cmd[-1]
+    assert "export FOO=" in full_command
+    assert full_command.index("export FOO=") < full_command.index("cd /tmp")
 
 
 def test_run_remote_failure_raises(target: SSHTarget) -> None:

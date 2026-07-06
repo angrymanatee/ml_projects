@@ -8,7 +8,7 @@ from remote.ssh import SSHTarget
 
 _SOURCE_DIRS = ["time_series", "common"]
 _SOURCE_FILES = ["pyproject.toml"]
-_RSYNC_BASE_OPTS = ["-avz", "--delete"]
+_RSYNC_BASE_OPTS = ["-avz", "--delete", "--mkpath"]
 _CODE_EXCLUDE_OPTS = ["--exclude=__pycache__/", "--exclude=*.pyc", "--exclude=.venv/"]
 
 
