@@ -20,4 +20,4 @@ if __name__ == "__main__":
     #       n_families=n_families,
     #       n_output_steps=dataset.output_lags,
     #   )
-    #   run(model, dataset, epochs=50, learning_rate=1e-3)
+    #   run(model, dataset, epochs=50, batch_size=128, learning_rate=2e-3)
