@@ -4,6 +4,8 @@ runpod_config.yaml
 # Don't commit data directories
 data/
 mlflow/
+mlruns/
+mlflow.db
 
 # Python
 .venv/

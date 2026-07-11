@@ -17,12 +17,12 @@ from .data import StoreData
 
 
 def get_device() -> torch.device:
-    """Return MPS if available, else CPU."""
-    return (
-        torch.device("mps")
-        if torch.backends.mps.is_available()
-        else torch.device("cpu")
-    )
+    """Return CUDA if available, MPS if on Apple Silicon, else CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def make_loaders(

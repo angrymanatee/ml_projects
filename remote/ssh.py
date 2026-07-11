@@ -66,6 +66,29 @@ def run_remote(
     return result
 
 
+def open_tunnel(target: SSHTarget, remote_port: int, local_port: int) -> None:
+    """Open an SSH port-forward tunnel and block until the user interrupts.
+
+    Forwards local_port → remote localhost:remote_port. Run in the foreground;
+    press Ctrl-C to close.
+
+    Args:
+        target: SSH connection details.
+        remote_port: Port the service listens on on the remote machine.
+        local_port: Local port to bind on the client machine.
+    """
+    subprocess.run(
+        [
+            "ssh",
+            *target.ssh_opts,
+            "-L",
+            f"{local_port}:localhost:{remote_port}",
+            "-N",
+            target.ssh_destination(),
+        ]
+    )
+
+
 def wait_for_ssh(target: SSHTarget, timeout: int = 120) -> None:
     """Poll until SSH accepts connections on the pod.
 

@@ -1,0 +1,22 @@
+# Factorized encoder — single GPU training run
+# API key: never put here — always from env var RUNPOD_API_KEY
+
+# gpu_type: "NVIDIA GeForce RTX 4090"
+gpu_type: "NVIDIA GeForce RTX 3090"
+# gpu_type: "NVIDIA RTX A4000"
+gpu_count: 1
+cloud_type: "COMMUNITY"
+docker_image: "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+mlflow_cpu_image: "runpod/base:0.6.2-cpu"
+
+pod_name_prefix: "mlprojects"
+remote_project_dir: "/workspace/mlprojects"
+remote_data_dir: "/workspace/data"
+remote_mlruns_dir: "/workspace/mlruns"
+local_mlruns_dir: "mlruns"
+
+default_datasets:
+  - "store-sales-time-series-forecasting"
+
+on_complete: "terminate"
+mlflow_port: 5000

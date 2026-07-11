@@ -72,9 +72,9 @@ def test_setup_environment_verifies_cuda(
 def test_start_mlflow_launches_server(config: RunPodConfig, target: SSHTarget) -> None:
     with patch("remote.environment.run_remote", return_value=_ok()) as mock_run:
         start_mlflow(target, config)
-    cmd = mock_run.call_args[0][1]
-    assert "mlflow server" in cmd
-    assert str(config.mlflow_port) in cmd
+    launch_cmd = mock_run.call_args_list[0][0][1]
+    assert "mlflow server" in launch_cmd
+    assert str(config.mlflow_port) in launch_cmd
 
 
 def test_start_mlflow_runs_in_background(
@@ -82,8 +82,17 @@ def test_start_mlflow_runs_in_background(
 ) -> None:
     with patch("remote.environment.run_remote", return_value=_ok()) as mock_run:
         start_mlflow(target, config)
-    cmd = mock_run.call_args[0][1]
-    assert "nohup" in cmd and "&" in cmd
+    launch_cmd = mock_run.call_args_list[0][0][1]
+    assert "nohup" in launch_cmd and "&" in launch_cmd
+
+
+def test_start_mlflow_waits_for_ready(config: RunPodConfig, target: SSHTarget) -> None:
+    with patch("remote.environment.run_remote", return_value=_ok()) as mock_run:
+        start_mlflow(target, config)
+    assert mock_run.call_count == 2
+    health_cmd = mock_run.call_args_list[1][0][1]
+    assert "curl" in health_cmd
+    assert str(config.mlflow_port) in health_cmd
 
 
 def test_stop_mlflow_kills_process(config: RunPodConfig, target: SSHTarget) -> None:

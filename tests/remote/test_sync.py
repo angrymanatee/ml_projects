@@ -133,7 +133,9 @@ def test_pull_results_export_import_pipeline(
     assert "mlflow-export" in all_cmds[1]
     # Step 3: import-experiments into local file store
     assert "import-experiments" in all_cmds[2]
-    assert "mlruns" in all_cmds[2]
+    import_env = mock_run.call_args_list[2][1].get("env", {})
+    assert "MLFLOW_TRACKING_URI" in import_env
+    assert "mlruns" in import_env["MLFLOW_TRACKING_URI"]
 
 
 def test_pull_results_creates_local_dir(

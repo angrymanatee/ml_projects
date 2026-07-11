@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -9,7 +10,7 @@ from remote.ssh import SSHTarget, run_remote
 
 _SOURCE_DIRS = ["time_series", "common"]
 _SOURCE_FILES = ["pyproject.toml"]
-_RSYNC_BASE_OPTS = ["-avz", "--delete", "--mkpath"]
+_RSYNC_BASE_OPTS = ["-avz", "--delete"]
 _CODE_EXCLUDE_OPTS = ["--exclude=__pycache__/", "--exclude=*.pyc", "--exclude=.venv/"]
 
 
@@ -44,6 +45,10 @@ def push_code(target: SSHTarget, config: RunPodConfig) -> None:
     Syncs time_series/, common/, pyproject.toml.
     Skips: data/, mlruns/, .venv/, __pycache__/, .git/.
     """
+    run_remote(
+        target, "which rsync || (apt-get update -qq && apt-get install -y -qq rsync)"
+    )
+    run_remote(target, f"mkdir -p {config.remote_project_dir}")
     remote_dest = f"{target.user}@{target.host}:{config.remote_project_dir}"
     for dir_name in _SOURCE_DIRS:
         if Path(dir_name).exists():
@@ -86,12 +91,8 @@ def pull_results(target: SSHTarget, config: RunPodConfig) -> None:
 
     run_remote(
         target,
-        (
-            f"export-experiments"
-            f" --mlflow-tracking-uri {remote_mlflow_uri}"
-            f" --experiments '*'"
-            f" --output-dir {remote_export_dir}"
-        ),
+        f"export-experiments --experiments '*' --output-dir {remote_export_dir}",
+        env={"MLFLOW_TRACKING_URI": remote_mlflow_uri},
     )
 
     local_mlruns = Path(config.local_mlruns_dir)
@@ -103,15 +104,10 @@ def pull_results(target: SSHTarget, config: RunPodConfig) -> None:
 
         local_tracking_uri = local_mlruns.resolve().as_uri()
         result = subprocess.run(
-            [
-                "import-experiments",
-                "--mlflow-tracking-uri",
-                local_tracking_uri,
-                "--input-dir",
-                local_export_dir,
-            ],
+            ["import-experiments", "--input-dir", local_export_dir],
             capture_output=True,
             text=True,
+            env={**os.environ, "MLFLOW_TRACKING_URI": local_tracking_uri},
         )
         if result.returncode != 0:
             raise RuntimeError(

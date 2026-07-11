@@ -134,7 +134,7 @@ See [RunPod deployment design](superpowers/specs/2026-07-05-runpod-deployment-de
    ```
 4. Copy and fill in config:
    ```bash
-   cp runpod_config.yaml.example runpod_config.yaml
+   cp configs/runpod_config.yaml.example runpod_config.yaml
    ```
 
 ### Quick start — single run (fully automated)

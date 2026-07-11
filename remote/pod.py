@@ -25,7 +25,7 @@ def _init_sdk(config: RunPodConfig) -> None:
 
 
 def _extract_ssh_target(pod: dict) -> SSHTarget:
-    ports = pod.get("runtime", {}).get("ports", [])
+    ports = (pod.get("runtime") or {}).get("ports", [])
     ssh_port = next(
         (p for p in ports if p.get("privatePort") == 22 and p.get("isIpPublic")),
         None,
@@ -100,6 +100,8 @@ def get_ssh_target(config: RunPodConfig, pod_id: str) -> SSHTarget:
     """Fetch SSH connection info for a pod that is already running."""
     _init_sdk(config)
     pod = runpod_sdk.get_pod(pod_id)
+    if pod is None:
+        raise RuntimeError(f"Pod {pod_id!r} not found")
     return _extract_ssh_target(pod)
 
 
@@ -125,8 +127,10 @@ def wait_for_running(
     elapsed = 0
     while elapsed < timeout:
         pod = runpod_sdk.get_pod(pod_id)
-        if pod.get("desiredStatus") == "RUNNING" and pod.get("runtime", {}).get(
-            "ports"
+        if (
+            pod is not None
+            and pod.get("desiredStatus") == "RUNNING"
+            and (pod.get("runtime") or {}).get("ports")
         ):
             return _extract_ssh_target(pod)
         time.sleep(_POLL_INTERVAL)

@@ -91,6 +91,24 @@ def test_wait_for_running_polls_until_running(config: RunPodConfig) -> None:
     assert isinstance(target, SSHTarget)
 
 
+def test_wait_for_running_handles_none_response(config: RunPodConfig) -> None:
+    """get_pod returns None briefly after pod creation before it registers."""
+    with patch("remote.pod.runpod_sdk") as mock_sdk, patch("remote.pod.time.sleep"):
+        mock_sdk.get_pod.side_effect = [None, None, _running_pod()]
+        target = wait_for_running(config, "abc123")
+    assert mock_sdk.get_pod.call_count == 3
+    assert isinstance(target, SSHTarget)
+
+
+def test_wait_for_running_handles_none_runtime(config: RunPodConfig) -> None:
+    """runtime key present but None transiently during startup."""
+    starting = {"id": "x", "desiredStatus": "RUNNING", "runtime": None}
+    with patch("remote.pod.runpod_sdk") as mock_sdk, patch("remote.pod.time.sleep"):
+        mock_sdk.get_pod.side_effect = [starting, _running_pod()]
+        target = wait_for_running(config, "x")
+    assert isinstance(target, SSHTarget)
+
+
 def test_wait_for_running_times_out(config: RunPodConfig) -> None:
     not_running = {"id": "x", "desiredStatus": "CREATED", "runtime": {"ports": []}}
     with patch("remote.pod.runpod_sdk") as mock_sdk, patch("remote.pod.time.sleep"):
@@ -113,6 +131,13 @@ def test_get_ssh_target_raises_when_no_port(config: RunPodConfig) -> None:
         mock_sdk.get_pod.return_value = pod
         with pytest.raises(RuntimeError, match="No public SSH port"):
             get_ssh_target(config, "x")
+
+
+def test_get_ssh_target_raises_when_pod_not_found(config: RunPodConfig) -> None:
+    with patch("remote.pod.runpod_sdk") as mock_sdk:
+        mock_sdk.get_pod.return_value = None
+        with pytest.raises(RuntimeError, match="not found"):
+            get_ssh_target(config, "missing-pod")
 
 
 def test_get_pod_returns_raw_dict(config: RunPodConfig) -> None:

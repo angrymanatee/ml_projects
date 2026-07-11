@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 import typer
@@ -21,7 +22,7 @@ from remote.pod import (
     terminate_pod,
     wait_for_running,
 )
-from remote.ssh import run_remote, wait_for_ssh
+from remote.ssh import open_tunnel, run_remote, wait_for_ssh
 from remote.sync import pull_results, push_code, push_data
 
 app = typer.Typer(
@@ -215,9 +216,32 @@ def train_cmd(
     target = get_ssh_target(config, pod_id)
     normalized = _normalize_train_command(train_command)
     uri = mlflow_uri or f"http://localhost:{config.mlflow_port}"
-    full_cmd = f"cd {config.remote_project_dir} && {' '.join(normalized)}"
+    full_cmd = f"cd {config.remote_project_dir} && {shlex.join(normalized)}"
     run_remote(target, full_cmd, env={"MLFLOW_TRACKING_URI": uri})
     typer.echo("Training complete.")
+
+
+# ── Tunnel command ────────────────────────────────────────────────────────────
+
+
+@app.command("tunnel")
+def tunnel_cmd(
+    pod_id: str,
+    local_port: int = typer.Option(5001, "--local-port", help="Local port to bind"),
+    config_path: Path = _CONFIG_OPTION,
+) -> None:
+    """Forward a local port to the MLflow UI on a running pod.
+
+    Blocks until interrupted (Ctrl-C). While running, open:
+      http://localhost:<local-port>
+    """
+    config = load_config(config_path)
+    target = get_ssh_target(config, pod_id)
+    typer.echo(
+        f"Tunneling localhost:{local_port} → pod:{config.mlflow_port}  "
+        f"— open http://localhost:{local_port}  (Ctrl-C to close)"
+    )
+    open_tunnel(target, remote_port=config.mlflow_port, local_port=local_port)
 
 
 # ── Run command (full pipeline, single pod) ───────────────────────────────────
@@ -270,7 +294,7 @@ def run_cmd(
         start_mlflow(target, config)
 
         typer.echo("Running training...")
-        full_cmd = f"cd {config.remote_project_dir} && {' '.join(normalized)}"
+        full_cmd = f"cd {config.remote_project_dir} && {shlex.join(normalized)}"
         run_remote(
             target,
             full_cmd,
@@ -338,7 +362,7 @@ def sweep_run(
             for ds in datasets:
                 push_data(target, config, ds)
             setup_environment(target, config)
-            full_cmd = f"cd {config.remote_project_dir} && {' '.join(normalized)}"
+            full_cmd = f"cd {config.remote_project_dir} && {shlex.join(normalized)}"
             run_remote(target, full_cmd, env={"MLFLOW_TRACKING_URI": mlflow_uri})
             typer.echo(f"[sweep-{index}] Training complete.")
             _apply_on_complete(config, pod_id)
