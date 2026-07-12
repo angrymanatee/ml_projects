@@ -7,11 +7,40 @@ import pytest
 from time_series.store_sales import StoreData
 from time_series.store_sales.tabular import (
     FeatureConfig,
+    _national_holiday_dates,
     add_origin_features,
     build_prediction_frame,
     build_training_frame,
     sales_long_from_store_data,
 )
+
+
+class _HolidayStub:
+    def __init__(self, holidays: pd.DataFrame) -> None:
+        self.holidays = holidays
+
+
+def test_national_holiday_dates_matches_neural_semantics() -> None:
+    # Mirrors data.py's national_holiday: exclude transferred-away Holidays and
+    # non-holiday national rows (Event/Work Day); include Transfer observances.
+    holidays = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2016-05-01", "2016-05-02", "2016-07-03", "2016-08-10", "2016-09-01"]
+            ),
+            "type": ["Holiday", "Transfer", "Holiday", "Event", "Work Day"],
+            "locale": ["National", "National", "National", "National", "National"],
+            "transferred": [True, False, False, False, False],
+        }
+    )
+    holidays = holidays.set_index(pd.DatetimeIndex(holidays["date"]))
+    result = _national_holiday_dates(_HolidayStub(holidays))
+
+    assert pd.Timestamp("2016-05-01") not in result  # transferred away
+    assert pd.Timestamp("2016-05-02") in result  # Transfer observance
+    assert pd.Timestamp("2016-07-03") in result  # ordinary national Holiday
+    assert pd.Timestamp("2016-08-10") not in result  # Event is not a holiday
+    assert pd.Timestamp("2016-09-01") not in result  # Work Day is not a holiday
 
 
 def _single_series(n_days: int = 30) -> pd.DataFrame:

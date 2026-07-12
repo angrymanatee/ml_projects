@@ -107,10 +107,22 @@ def _promotion_long(store_data) -> pd.DataFrame:
 
 
 def _national_holiday_dates(store_data) -> set[pd.Timestamp]:
-    """Normalized dates of National-locale holidays, from store_data.holidays."""
+    """Normalized dates of national holidays, matching StoreData's national_holiday.
+
+    A date counts as a national holiday when it is a National `Holiday` that was
+    not transferred away, or a National `Transfer` row (the relocated
+    observance). Transferred-away originals and non-holiday national rows
+    (`Event`, `Bridge`, `Work Day`, `Additional`) are excluded, so the LightGBM
+    is_holiday flag agrees with the neural models' national_holiday channel
+    (see data.py _setup_holiday_tensor). Filtering on locale alone would flag
+    transferred-away days and compensatory work days as holidays.
+    """
     holidays = store_data.holidays
-    national = holidays[holidays["locale"] == "National"]
-    return set(pd.to_datetime(national["date"]).dt.normalize())
+    is_national = holidays["locale"] == "National"
+    active = (
+        (holidays["type"] == "Holiday") & is_national & ~holidays["transferred"]
+    ) | ((holidays["type"] == "Transfer") & is_national)
+    return set(pd.to_datetime(holidays.loc[active, "date"]).dt.normalize())
 
 
 def _feature_frame(
