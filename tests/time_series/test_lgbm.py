@@ -4,59 +4,14 @@ See the rootdir conftest.py for why `lightgbm` must be imported before `torch`
 in this process (a segfault on this machine otherwise).
 """
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
-import pytest
 
 from time_series.store_sales import StoreData
 from time_series.store_sales import lgbm as lgbm_module
 from time_series.store_sales.backtest import BacktestConfig, backtest
 from time_series.store_sales.lgbm import LGBMParams, LightGBMForecaster
 from time_series.store_sales.tabular import FeatureConfig
-
-
-@pytest.fixture(scope="module")
-def long_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A ~40-day single-series dataset, enough for a multi-fold backtest."""
-    directory = tmp_path_factory.mktemp("store_sales_long")
-    dates = pd.date_range("2013-01-01", periods=40, freq="D")
-    rows = [
-        {
-            "date": date,
-            "store_nbr": 1,
-            "family": "GROCERY I",
-            "sales": 10.0 + day_index + 3.0 * (day_index % 7),  # non-constant
-            "onpromotion": 0,
-        }
-        for day_index, date in enumerate(dates)
-    ]
-    train = pd.DataFrame(rows)
-    train.to_csv(directory / "train.csv", index=False)
-    train.to_csv(directory / "test.csv", index=False)
-
-    pd.DataFrame({"id": [0], "sales": [0.0]}).to_csv(
-        directory / "sample_submission.csv", index=False
-    )
-    pd.DataFrame(
-        {"city": ["Quito"], "state": ["Pichincha"], "type": ["D"], "cluster": [1]},
-        index=pd.Index([1], name="store_nbr"),
-    ).reset_index().to_csv(directory / "stores.csv", index=False)
-    pd.DataFrame(
-        {"date": dates.astype(str), "dcoilwtico": 90.0 + np.arange(len(dates)) * 0.1}
-    ).to_csv(directory / "oil.csv", index=False)
-    pd.DataFrame(
-        {
-            "date": ["2013-01-01"],
-            "type": ["Holiday"],
-            "locale": ["National"],
-            "locale_name": ["Ecuador"],
-            "description": ["New Year"],
-            "transferred": [False],
-        }
-    ).to_csv(directory / "holidays_events.csv", index=False)
-    return directory
 
 
 def test_forecaster_predict_shape_and_nonneg(mock_data_dir) -> None:
