@@ -812,3 +812,11 @@ def test_invalid_holiday_feature_raises(mock_data_dir: Path) -> None:
             data_dir=mock_data_dir,
             holiday_features=["bogus"],
         )
+
+
+def test_dates_attribute_matches_sales_tensor_length(mock_data_dir: Path) -> None:
+    from time_series.store_sales import StoreData
+
+    store_data = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    assert len(store_data.dates) == store_data.sales_tensor.shape[0]
+    assert list(store_data.dates) == sorted(store_data.dates)

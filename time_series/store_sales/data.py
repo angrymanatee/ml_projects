@@ -161,9 +161,9 @@ class StoreData(Dataset):
         self.sales_tensor, self.families = self._setup_tensor(
             self.train, self.stores, dtype, copy
         )
-        dates = pd.DatetimeIndex(self.train.index.unique().sort_values())
+        self.dates = pd.DatetimeIndex(self.train.index.unique().sort_values())
         self.date_features_tensor = self._setup_date_features(
-            dates,
+            self.dates,
             date_features,
             payday_features,
             earthquake_encoding,
