@@ -38,6 +38,23 @@ def test_build_training_frame_empty_window_raises(mock_data_dir) -> None:
         build_training_frame(store_data, config, pd.Timestamp("2012-01-01"))  # type: ignore[arg-type]
 
 
+def test_prediction_frame_uses_future_promotions_from_test(
+    future_promo_data_dir,
+) -> None:
+    # Predicting past the last observed date must pull onpromotion from test.csv,
+    # not leave it NaN. test.csv marks 2013-01-06/07/08 as promo [1, 0, 1].
+    store_data = StoreData(window_lags=1, output_lags=1, data_dir=future_promo_data_dir)
+    config = FeatureConfig(lags=(), rolling_windows=(), horizon=3)
+    origin = cast(pd.Timestamp, pd.Timestamp("2013-01-05"))
+    frame = build_prediction_frame(store_data, config, origin=origin)
+
+    assert not bool(frame["onpromotion"].isna().any())
+    promo_by_step = frame.set_index("horizon_step")["onpromotion"]
+    assert promo_by_step.loc[1] == 1  # 2013-01-06
+    assert promo_by_step.loc[2] == 0  # 2013-01-07
+    assert promo_by_step.loc[3] == 1  # 2013-01-08
+
+
 def test_national_holiday_dates_matches_neural_semantics() -> None:
     # Mirrors data.py's national_holiday: exclude transferred-away Holidays and
     # non-holiday national rows (Event/Work Day); include Transfer observances.

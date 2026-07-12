@@ -18,14 +18,16 @@ def write_store_sales_csvs(
     stores: pd.DataFrame,
     oil: pd.DataFrame,
     holidays: pd.DataFrame,
+    test: pd.DataFrame | None = None,
 ) -> None:
     """Write the six CSVs StoreData.__init__ reads (single source for the file set).
 
-    train/stores/oil/holidays are already column-shaped (no index written). test.csv
-    reuses train so StoreData's future-frame load has the same schema.
+    train/stores/oil/holidays are already column-shaped (no index written). test
+    defaults to train (same schema); pass a distinct frame to exercise the
+    known-future path (test dates after the last train date).
     """
     train.to_csv(directory / "train.csv", index=False)
-    train.to_csv(directory / "test.csv", index=False)
+    (train if test is None else test).to_csv(directory / "test.csv", index=False)
     pd.DataFrame({"id": [0], "sales": [0.0]}).to_csv(
         directory / "sample_submission.csv", index=False
     )
@@ -92,6 +94,52 @@ def mock_data_dir(
                 "date": ["2013-01-01", "2013-01-02", "2013-01-03"],
                 "dcoilwtico": [93.14, 93.20, 93.08],
             }
+        ),
+        holidays=_national_new_year("2013-01-01"),
+    )
+    return directory
+
+
+@pytest.fixture(scope="module")
+def future_promo_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """5 observed days + a test.csv with 3 future days carrying known promotions."""
+    directory = tmp_path_factory.mktemp("store_sales_future_promo")
+    train_dates = pd.date_range("2013-01-01", periods=5, freq="D")
+    future_dates = pd.date_range("2013-01-06", periods=3, freq="D")
+    train = pd.DataFrame(
+        {
+            "date": train_dates,
+            "store_nbr": 1,
+            "family": "GROCERY I",
+            "sales": np.arange(5, dtype=float),
+            "onpromotion": 0,
+        }
+    )
+    test = pd.DataFrame(
+        {
+            "date": future_dates,
+            "store_nbr": 1,
+            "family": "GROCERY I",
+            "onpromotion": [1, 0, 1],  # the known-future signal to recover
+        }
+    )
+    stores = pd.DataFrame(
+        {
+            "store_nbr": [1],
+            "city": ["Quito"],
+            "state": ["Pichincha"],
+            "type": ["D"],
+            "cluster": [1],
+        }
+    )
+    all_dates = train_dates.append(future_dates)
+    write_store_sales_csvs(
+        directory,
+        train=train,
+        test=test,
+        stores=stores,
+        oil=pd.DataFrame(
+            {"date": all_dates.astype(str), "dcoilwtico": 90.0 + np.arange(8) * 0.1}
         ),
         holidays=_national_new_year("2013-01-01"),
     )

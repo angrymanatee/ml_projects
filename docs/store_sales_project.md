@@ -75,6 +75,9 @@ are `expm1`'d and clipped at 0. Features come from `time_series/store_sales/tabu
 historical lag/rolling features computed **as-of each row's origin** (never seeing
 the target day), known-future calendar/promotion/holiday features as-of the target
 day, and static store/family categoricals (native LightGBM categorical handling).
+Known-future promotions come from `train` for observed target dates and from
+`test.csv` for target dates beyond the last observed day, so out-of-sample
+forecasts use the real future promotion calendar rather than a missing value.
 `LGBMParams.objective` defaults to `"regression"`; set it to `"tweedie"` for the
 Tweedie challenger with no other code change. Import `LightGBMForecaster`/`LGBMParams`
 from `time_series.store_sales.lgbm` (not the package root — that keeps `lightgbm`

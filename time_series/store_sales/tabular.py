@@ -90,7 +90,15 @@ def _calendar_features(dates: pd.Series) -> pd.DataFrame:
 
 
 def _promotion_long(store_data: StoreData) -> pd.DataFrame:
-    """Long-form onpromotion keyed by (date, store, family); zeros if absent."""
+    """Long-form onpromotion keyed by (date, store, family).
+
+    Observed dates come from promotion_tensor (built from train); dates strictly
+    after the last observed date come from store_data.test — the competition's
+    known-future promotion calendar. Without the future rows, predicting target
+    dates beyond the last observed date leaves onpromotion NaN even though the
+    real values are known. Train and future date ranges are disjoint, so the
+    downstream left-merge on target_date never double-matches.
+    """
     dates = pd.DatetimeIndex(store_data.dates)
     stores = sorted(
         store_data.stores.index
@@ -100,12 +108,33 @@ def _promotion_long(store_data: StoreData) -> pd.DataFrame:
         promo = np.zeros((len(dates), len(stores), len(families)))
     else:
         promo = np.asarray(store_data.promotion_tensor)
-    return pd.DataFrame(
+    train_long = pd.DataFrame(
         {
             "date": np.repeat(dates.values, len(stores) * len(families)),
             "store": np.tile(np.repeat(stores, len(families)), len(dates)),
             "family": np.tile(families, len(dates) * len(stores)),
             "onpromotion": promo.reshape(-1),
+        }
+    )
+    future_long = _future_promotion_long(store_data, dates[-1])  # type: ignore[arg-type]
+    if future_long.empty:
+        return train_long
+    return pd.concat([train_long, future_long], ignore_index=True)
+
+
+def _future_promotion_long(
+    store_data: StoreData, last_observed: pd.Timestamp
+) -> pd.DataFrame:
+    """onpromotion from test.csv for dates strictly after the last observed date."""
+    test = store_data.test
+    future = test.loc[pd.DatetimeIndex(test.index) > last_observed]
+    future_dates = pd.DatetimeIndex(future.index)
+    return pd.DataFrame(
+        {
+            "date": future_dates.values,
+            "store": future["store_nbr"].to_numpy(),
+            "family": future["family"].to_numpy(),
+            "onpromotion": future["onpromotion"].to_numpy(dtype=float),
         }
     )
 
