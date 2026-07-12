@@ -58,3 +58,16 @@ def test_forecaster_plugs_into_backtest(mock_data_dir) -> None:
     result = backtest(factory, store_data, config)
     assert len(result.per_fold) >= 1
     assert np.isfinite(result.mean_rmsle)
+
+
+def test_run_backtest_helper_returns_result(mock_data_dir) -> None:
+    from time_series.main_store_sales_lgbm import run_backtest
+
+    store_data = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    result = run_backtest(
+        store_data,
+        FeatureConfig(lags=(), rolling_windows=(), horizon=1),
+        LGBMParams(n_estimators=5),
+        BacktestConfig(n_folds=1, horizon=1, min_train_days=1),
+    )
+    assert np.isfinite(result.mean_rmsle)
