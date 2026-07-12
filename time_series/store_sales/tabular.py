@@ -106,6 +106,18 @@ def _promotion_long(store_data) -> pd.DataFrame:
     )
 
 
+def _store_family_grid(store_data) -> pd.DataFrame:
+    """Every (store, family) pair, stores ascending by store_nbr (tensor order)."""
+    stores = sorted(store_data.stores.index)
+    families = list(store_data.families)
+    return pd.DataFrame(
+        {
+            "store": np.repeat(stores, len(families)),
+            "family": np.tile(families, len(stores)),
+        }
+    )
+
+
 def _national_holiday_dates(store_data) -> set[pd.Timestamp]:
     """Normalized dates of national holidays, matching StoreData's national_holiday.
 
@@ -200,36 +212,33 @@ def build_training_frame(
     lag features.
     """
     dates = pd.DatetimeIndex(store_data.dates)
-    train_dates = dates[dates <= train_up_to]
-    sales_long = sales_long_from_store_data(store_data).set_index(
-        ["date", "store", "family"]
-    )["sales"]
+    train_dates = dates[dates <= pd.Timestamp(train_up_to)]
 
-    stores = list(store_data.stores.index)
-    families = list(store_data.families)
-    date_set = set(dates)
+    # (target_date, horizon_step, origin_date) triples where origin = target -
+    # horizon_step days is an observed date (otherwise no lag/rolling feature
+    # exists for that origin). Built vectorized: at full scale this table has
+    # ~n_train_dates * horizon rows before the store/family cross.
+    target_repeated = np.repeat(train_dates.values, config.horizon)
+    steps = np.tile(np.arange(1, config.horizon + 1), len(train_dates))
+    origin = target_repeated - steps * np.timedelta64(1, "D")
+    keep = np.isin(origin, dates.values)
+    triples = pd.DataFrame(
+        {
+            "target_date": target_repeated[keep],
+            "horizon_step": steps[keep],
+            "origin_date": origin[keep],
+        }
+    )
 
-    rows = []
-    for target_date in train_dates:
-        for horizon_step in range(1, config.horizon + 1):
-            origin_date = target_date - pd.Timedelta(days=horizon_step)
-            if origin_date not in date_set:
-                continue
-            for store in stores:
-                for family in families:
-                    rows.append(
-                        {
-                            "store": store,
-                            "family": family,
-                            "origin_date": origin_date,
-                            "horizon_step": horizon_step,
-                            "target_date": target_date,
-                            "target": float(
-                                np.log1p(sales_long.loc[(target_date, store, family)])
-                            ),
-                        }
-                    )
-    origins = pd.DataFrame(rows)
+    origins = triples.merge(_store_family_grid(store_data), how="cross")
+    sales_long = sales_long_from_store_data(store_data).rename(
+        columns={"date": "target_date"}
+    )
+    origins = origins.merge(
+        sales_long, on=["target_date", "store", "family"], how="left"
+    )
+    origins["target"] = np.log1p(origins.pop("sales"))
+
     frame = _feature_frame(store_data, config, origins)
     if config.lags:
         frame = frame.dropna(subset=[f"lag_{max(config.lags)}"])
@@ -243,21 +252,14 @@ def build_prediction_frame(
 
     No target column: these target dates are unobserved (future).
     """
-    stores = list(store_data.stores.index)
-    families = list(store_data.families)
-    rows = []
-    for horizon_step in range(1, config.horizon + 1):
-        target_date = pd.Timestamp(origin) + pd.Timedelta(days=horizon_step)
-        for store in stores:
-            for family in families:
-                rows.append(
-                    {
-                        "store": store,
-                        "family": family,
-                        "origin_date": pd.Timestamp(origin),
-                        "horizon_step": horizon_step,
-                        "target_date": target_date,
-                    }
-                )
-    origins = pd.DataFrame(rows)
+    origin = pd.Timestamp(origin)  # type: ignore[assignment]
+    steps = np.arange(1, config.horizon + 1)
+    triples = pd.DataFrame(
+        {
+            "origin_date": origin,
+            "horizon_step": steps,
+            "target_date": origin + pd.to_timedelta(steps, unit="D"),
+        }
+    )
+    origins = triples.merge(_store_family_grid(store_data), how="cross")
     return _feature_frame(store_data, config, origins)
