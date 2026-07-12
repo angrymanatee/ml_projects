@@ -74,8 +74,11 @@ def push_data(target: SSHTarget, config: RunPodConfig, dataset: str) -> None:
     local_path = Path("data") / dataset
     if not local_path.exists():
         raise FileNotFoundError(f"Dataset not found locally: {local_path}")
-    remote_dest = f"{target.user}@{target.host}:{config.remote_data_dir}/{dataset}/"
-    _run_rsync(f"data/{dataset}/", remote_dest, target)
+    remote_dataset_dir = f"{config.remote_data_dir}/{dataset}"
+    run_remote(target, f"mkdir -p {remote_dataset_dir}")
+    _run_rsync(
+        f"data/{dataset}/", f"{target.user}@{target.host}:{remote_dataset_dir}/", target
+    )
 
 
 def pull_results(target: SSHTarget, config: RunPodConfig) -> None:

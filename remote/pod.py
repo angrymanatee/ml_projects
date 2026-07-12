@@ -24,7 +24,7 @@ def _init_sdk(config: RunPodConfig) -> None:
     runpod_sdk.api_key = config.api_key
 
 
-def _extract_ssh_target(pod: dict) -> SSHTarget:
+def _extract_ssh_target(pod: dict, config: RunPodConfig) -> SSHTarget:
     ports = (pod.get("runtime") or {}).get("ports", [])
     ssh_port = next(
         (p for p in ports if p.get("privatePort") == 22 and p.get("isIpPublic")),
@@ -32,7 +32,11 @@ def _extract_ssh_target(pod: dict) -> SSHTarget:
     )
     if not ssh_port:
         raise RuntimeError(f"No public SSH port found for pod {pod['id']!r}")
-    return SSHTarget(host=ssh_port["ip"], port=ssh_port["publicPort"])
+    return SSHTarget(
+        host=ssh_port["ip"],
+        port=ssh_port["publicPort"],
+        identity_file=config.ssh_key_path,
+    )
 
 
 def create_pod(config: RunPodConfig, *, name_suffix: str = "") -> str:
@@ -102,7 +106,7 @@ def get_ssh_target(config: RunPodConfig, pod_id: str) -> SSHTarget:
     pod = runpod_sdk.get_pod(pod_id)
     if pod is None:
         raise RuntimeError(f"Pod {pod_id!r} not found")
-    return _extract_ssh_target(pod)
+    return _extract_ssh_target(pod, config)
 
 
 def wait_for_running(
@@ -132,7 +136,7 @@ def wait_for_running(
             and pod.get("desiredStatus") == "RUNNING"
             and (pod.get("runtime") or {}).get("ports")
         ):
-            return _extract_ssh_target(pod)
+            return _extract_ssh_target(pod, config)
         time.sleep(_POLL_INTERVAL)
         elapsed += _POLL_INTERVAL
     raise TimeoutError(f"Pod {pod_id!r} did not reach RUNNING status within {timeout}s")

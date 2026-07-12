@@ -13,17 +13,23 @@ class SSHTarget:
     host: str
     port: int
     user: str = "root"
+    identity_file: str | None = None
 
     @property
     def ssh_opts(self) -> list[str]:
-        return [
+        opts = [
             "-p",
             str(self.port),
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
             "ConnectTimeout=30",
+            "-o",
+            "PasswordAuthentication=no",
         ]
+        if self.identity_file:
+            opts += ["-i", self.identity_file]
+        return opts
 
     def ssh_destination(self) -> str:
         return f"{self.user}@{self.host}"

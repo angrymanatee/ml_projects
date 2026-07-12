@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import enum
 from collections import OrderedDict
 
@@ -350,18 +352,21 @@ class OutputProjection(nn.Module):
         return reshaped
 
 
-class StoreSalesFactorizedEncoder(nn.Module):
-    """Two-stage factorized encoder for multi-step store sales forecasting.
+class StoreSalesHierarchicalEncoder(nn.Module):
+    """Two-stage hierarchical encoder for multi-step store sales forecasting.
 
-    Stage 1 — time: each (store, family) time series is processed independently.
-      TimeReduction compresses the feature dimension via Conv1d, then InputProjection
-      projects to d_model_time and adds positional encoding. A TransformerEncoder
-      attends over the reduced time tokens. TimeToSF mean-pools the sequence and
-      reshapes to one embedding per (store, family) pair.
+    Stage 1 — per-series temporal encoding: each (store, family) time series is
+      processed independently. TimeReduction compresses the feature dimension via
+      Conv1d, then InputProjection projects to d_model_time and adds positional
+      encoding. A TransformerEncoder attends over the reduced time tokens. TimeToSF
+      mean-pools the sequence and reshapes to one summary embedding per (store, family).
 
-    Stage 2 — store×family: a second TransformerEncoder attends over all
-      n_stores × n_families spatial tokens. OutputProjection then projects each token
-      to n_output_steps and reshapes to the final forecast grid.
+    Stage 2 — cross-series attention: a second TransformerEncoder attends across all
+      n_stores × n_families summary embeddings, letting series interact before
+      OutputProjection maps each token to the output horizon.
+
+    This is NOT factorized (axial) attention — the time axis is fully collapsed by
+    mean-pooling before Stage 2 begins. Stage 2 sees only temporal summaries.
 
     Input shape:  (batch, window_lags, n_stores, n_families, n_input_channels)
     Output shape: (batch, n_output_steps, n_stores, n_families)
@@ -411,63 +416,57 @@ class StoreSalesFactorizedEncoder(nn.Module):
         self.n_stores = n_stores
         self.n_families = n_families
         self.n_output_steps = n_output_steps
-        models = OrderedDict[str, nn.Module](
-            [
-                # [B, T, S, F, X] -> [B, reduction_channels, S, F, L_out]
-                (
-                    "input_reduction",
-                    TimeReduction(
-                        reduction_channels, reduction_width, reduction_stride
-                    ),
-                ),
-                # [B, reduction_channels, S, F, L_out] -> [B*F*S, reduction_channels, d_model_time]
-                (
-                    "input_proj",
-                    InputProjection(d_model_time, max_length=max_seq_length),
-                ),
-                # [B*F*S, reduction_channels, d_model_time] (unchanged shape)
-                (
-                    "time_encoder",
-                    nn.TransformerEncoder(
-                        nn.TransformerEncoderLayer(
-                            d_model_time,
-                            nhead_time,
-                            dim_feedforward=dim_feedforward_time,
-                            batch_first=True,
-                        ),
-                        num_layers=num_layers_time,
-                    ),
-                ),
-                # [B*F*S, reduction_channels, d_model_time] -> [B, S*F, d_model_sf]
-                (
-                    "time_to_storefam",
-                    TimeToSF(n_stores, n_families, d_model_time, d_model_sf),
-                ),
-                (
-                    "sf_encoder",
-                    nn.TransformerEncoder(
-                        nn.TransformerEncoderLayer(
-                            d_model_sf,
-                            nhead_sf,
-                            dim_feedforward=dim_feedforward_sf,
-                            batch_first=True,
-                        ),
-                        num_layers=num_layers_sf,
-                    ),
-                ),
-                ("output_proj", OutputProjection(n_stores, n_families, n_output_steps)),
-                ("ReLU", nn.ReLU()),
-            ]
+        # [B, T, S, F, X] -> [B, reduction_channels, S, F, L_out]
+        self.input_reduction = TimeReduction(
+            reduction_channels, reduction_width, reduction_stride
         )
-        self.sequence = nn.Sequential(models)
+        # [B, reduction_channels, S, F, L_out] -> [B*S*F, reduction_channels, d_model_time]
+        self.input_proj = InputProjection(d_model_time, max_length=max_seq_length)
+        # [B*S*F, reduction_channels, d_model_time] (unchanged shape)
+        self.time_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model_time,
+                nhead_time,
+                dim_feedforward=dim_feedforward_time,
+                batch_first=True,
+            ),
+            num_layers=num_layers_time,
+        )
+        # [B*S*F, reduction_channels, d_model_time] -> [B, S*F, d_model_sf]
+        self.time_to_storefam = TimeToSF(n_stores, n_families, d_model_time, d_model_sf)
+        self.sf_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model_sf,
+                nhead_sf,
+                dim_feedforward=dim_feedforward_sf,
+                batch_first=True,
+            ),
+            num_layers=num_layers_sf,
+        )
+        self.output_proj = OutputProjection(n_stores, n_families, n_output_steps)
+        self.relu = nn.ReLU()
 
     def forward(self, input_sequence: Tensor) -> Tensor:
-        """Run the full encoder-only forward pass.
-
+        """
         Args:
             input_sequence: Shape (batch, seq_len, n_stores, n_families, n_features).
 
         Returns:
             Forecast tensor of shape (batch, n_output_steps, n_stores, n_families).
         """
-        return self.sequence(input_sequence)
+        x = self.input_reduction(input_sequence)
+        x = self.input_proj(x)
+        # The time encoder's effective batch is B*n_stores*n_families (~114k). Flash and
+        # mem-efficient attention both fail with this batch size on sm86 (PyTorch 2.4 bug).
+        # Math attention is safe: seq=reduction_channels=12, so the QK^T matrix is tiny.
+        if x.is_cuda:
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False, enable_math=True, enable_mem_efficient=False
+            ):
+                x = self.time_encoder(x)
+        else:
+            x = self.time_encoder(x)
+        x = self.time_to_storefam(x)
+        x = self.sf_encoder(x)
+        x = self.output_proj(x)
+        return self.relu(x)

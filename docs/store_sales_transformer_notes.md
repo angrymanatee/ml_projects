@@ -293,3 +293,126 @@ contributions is wanted, a follow-up run with a larger epoch budget for just
 `baseline`/`store_features`/`holiday_features` (the configs still near the ceiling)
 would be needed; not done here since the primary question (do the features help at
 all?) is already answered decisively.
+
+## Factorized Encoder Attempt — Architecture Post-Mortem (2026-07-11)
+
+### What it tried to do
+
+`StoreSalesHierarchicalEncoder` in `models.py` attempted a two-stage design:
+
+1. **Time encoder** — process each (store, family) time series independently with a
+   `TransformerEncoder` operating over the `T` time steps, then mean-pool to get one
+   embedding per (store, family).
+2. **SF encoder** — run a second `TransformerEncoder` across all 54×33 = 1782
+   (store, family) tokens to model cross-series dependencies, then project to the
+   output horizon.
+
+The motivation: separate "what does this store-family's history look like" from "how
+do stores and families relate to each other," rather than conflating both in a single
+encoder.
+
+### Why it failed
+
+**Implementation bug: batch explosion.**  To run the time encoder over all
+(store, family) series in parallel, the implementation flattened the S×F spatial
+dimensions into the batch axis. With default `batch_size=64`:
+
+$$\text{effective batch} = B \times n_{\text{stores}} \times n_{\text{families}} = 64 \times 54 \times 33 = 114{,}048$$
+
+CUDA's flash attention and memory-efficient attention kernels map the batch
+dimension to `grid.y`, which has a hardware maximum of **65535** on all NVIDIA GPUs.
+At 114k, the kernel launch is unconditionally rejected with
+`cudaErrorInvalidConfiguration` — this happens regardless of dtype, head count, or
+sequence length. The fallback (math attention) works because standard `torch.matmul`
+uses `grid.x` (max ~$2^{31}$), not `grid.y`. The workaround (`sdp_kernel` context
+manager forcing math-only for the time encoder) was committed, but the fix only
+papers over the symptom.
+
+The SF encoder (batch=64, seq=1782) works fine — flash attention handles long
+sequences well, it's the large batch that breaks things.
+
+**Inductive bias vs. cost.** Even if the CUDA issue were fixed (e.g. by reducing
+batch size so B×S×F ≤ 65535, which means `batch_size ≤ 36`), the architecture is
+expensive: `O(T^2)` attention per (store, family) series at time encoding, then
+`O((S \cdot F)^2)` at the spatial stage. The spatial stage with seq=1782 is the
+dominant cost; math attention would materialize a 1782×1782 matrix per batch
+(~1.5 GB at float32, batch=64). Flash handles this but it is slow.
+
+More importantly: **the encoder-only model already captures cross-store patterns via
+the feature channels** (store metadata, promotions, holidays are all included as
+feature channels). The temporal attention over a shared feature vector isn't obviously
+worse at learning cross-store correlations than explicit spatial attention.
+
+### Where to go from here
+
+**Option A: Better features + same architecture.** The encoder-only model at MSLE
+~0.996 (all features, 300 epochs) still has headroom. It converges at ~83% of budget
+and the variance across seeds is 0.12 — more epochs, a wider sweep of `lr` and
+`dim_feedforward`, or gradient clipping may push it further. This is the path of
+least resistance.
+
+**Option B: Per-series models with lag features (likely the highest ceiling).**
+Kaggle time series competitions are typically won by gradient-boosted trees (LightGBM,
+XGBoost) with hand-crafted lag features (14-day lags, rolling means, seasonal
+differences). These models handle the 54×33 independent-series structure naturally,
+require no GPU, train in minutes, and routinely outperform deep models on this
+competition. Worth implementing as a strong baseline before investing more in
+transformer architectures.
+
+**Option C: Purpose-built time series transformers.** Several architectures
+specifically address the high-variate, long-horizon forecasting problem:
+
+- **PatchTST** (Nie et al., 2023): tokenizes the input into non-overlapping patches
+  (e.g. 16-day windows) → reduces sequence length from T to T/patch_size. Attends
+  independently across time within each variate (avoids the S×F batch explosion by
+  treating each variate as an independent sequence, not a batch dimension). Strong on
+  ETTh/ETTm benchmarks. Available via `neuralforecast`.
+- **iTransformer** (Liu et al., 2024): inverts the attention — treats each variate's
+  full time series as a single token, attends across variates (S×F tokens) instead of
+  across time. Sequence length = S×F = 1782, attention captures cross-series
+  correlations directly. Avoids the time-axis attention cost entirely.
+- **N-BEATS**: purely MLP-based, no attention, interpretable trend/seasonality
+  decomposition. Surprisingly competitive, trains fast, worth trying as a neural
+  baseline before heavy transformers.
+- **TFT (Temporal Fusion Transformer)**: designed for multi-horizon forecasting with
+  static covariates, known/unknown future inputs. Closer to what this dataset
+  actually looks like (some covariates — holidays, paydays — are known in advance).
+
+**Option D: Fix the factorized encoder properly.** Rather than flattening S×F into
+the batch axis, process the time encoder with a true 3D operation: reshape the input
+to `[B, T, S*F*X]`, apply Conv1d over the feature axis to get `[B, T_reduced, S*F]`,
+then attend over T within each of the B samples (not B×S×F). This avoids the batch
+explosion entirely. The downside: per-(store,family) temporal patterns are no longer
+computed independently — they share weights across space in the temporal stage, which
+may or may not be an appropriate inductive bias for this dataset.
+
+### Recommendation
+
+Invest in Option B (LightGBM baseline) first — it's a 1-day effort and will give a
+meaningful upper-bound signal. Then try Option C (PatchTST or iTransformer via
+`neuralforecast`) if the LightGBM ceiling still has room. Don't invest more in the
+current encoder-only architecture without first knowing what the non-neural upper
+bound looks like.
+
+### Partial training run (killed at epoch 53/300, 2026-07-11)
+
+Ran on a RunPod A4000 (sm86). With the `sdp_kernel` math-only workaround in place for
+the time encoder, training started and produced real loss values — no more CUDA errors.
+But it was slow:
+
+- **35.8 samples/s** — ~36 sec/epoch → ~3 hours for a full 300-epoch run
+- val_loss trajectory: 13.35 → 6.52 over 53 epochs (still clearly descending)
+- Run killed at epoch 53; not worth the compute cost given the trajectory
+
+The slow throughput is the math-attention tax. Flash and memory-efficient attention
+both fail for batch=114,048 on sm86 (see above); math attention materializes the full
+`[114048, 2, 12, 12]` QK^T matrix every step. The encoder-only's `[64, 60, 64]`
+attention uses flash and trains far faster.
+
+At epoch 53, val_loss was 6.52. The encoder-only model reached 0.887 after 300 epochs
+with all features. Even extrapolating the factorized encoder's descent curve
+generously, it's unlikely to beat the encoder-only within a comparable compute budget.
+
+**MLflow run:** experiment `StoreSales_FactorizedEncoder`, run
+`43af03e57f45468d863dca6694fa318f` (status left as RUNNING — killed mid-run, treat
+metrics as incomplete).

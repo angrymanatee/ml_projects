@@ -18,3 +18,4 @@ default_datasets: []
 
 on_complete: "terminate"
 mlflow_port: 5000
+ssh_key_path: "/Users/sauron/.ssh/runpod.ed25519"

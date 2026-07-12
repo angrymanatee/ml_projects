@@ -29,6 +29,7 @@ def _ok() -> MagicMock:
 def _fail() -> MagicMock:
     r = MagicMock(spec=subprocess.CompletedProcess)
     r.returncode = 23
+    r.stdout = ""
     r.stderr = "connection refused"
     return r
 
@@ -107,7 +108,7 @@ def test_push_data_rsync_failure_raises(
     monkeypatch.chdir(tmp_path)
     (tmp_path / "data" / "store-sales").mkdir(parents=True)
     with (
-        patch("subprocess.run", return_value=_fail()),
+        patch("subprocess.run", side_effect=[_ok(), _fail()]),
         pytest.raises(RuntimeError, match="rsync failed"),
     ):
         push_data(target, config, "store-sales")

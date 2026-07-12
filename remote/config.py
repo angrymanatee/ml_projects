@@ -24,12 +24,15 @@ class RunPodConfig:
     mlflow_cpu_image: str = "runpod/base:0.6.2-cpu"
     pod_name_prefix: str = "mlprojects"
     remote_project_dir: str = "/workspace/mlprojects"
-    remote_data_dir: str = "/workspace/data"
+    remote_data_dir: str = "/workspace/mlprojects/data"
     remote_mlruns_dir: str = "/workspace/mlruns"
     local_mlruns_dir: str = "mlruns"
     default_datasets: list[str] = field(default_factory=list)
     on_complete: str = "terminate"  # terminate | stop | keep
     mlflow_port: int = 5000
+    ssh_key_path: str | None = (
+        None  # e.g. ~/.ssh/id_ed25519; None uses SSH agent defaults
+    )
 
 
 def load_config(config_path: Path = Path("runpod_config.yaml")) -> RunPodConfig:

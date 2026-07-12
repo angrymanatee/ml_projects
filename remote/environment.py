@@ -14,6 +14,8 @@ _REMOTE_DEPS = [
     "scipy>=1.17.1",
     "tqdm>=4.67.3",
     "kaggle>=2.1.2",
+    "plotly>=5.0.0",
+    "matplotlib>=3.10.9",
 ]
 
 

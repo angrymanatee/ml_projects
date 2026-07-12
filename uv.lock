@@ -1833,12 +1833,16 @@ dev = [
 ]
 remote = [
     { name = "kaggle" },
+    { name = "matplotlib" },
     { name = "mlflow" },
+    { name = "mlflow-export-import" },
     { name = "numpy" },
     { name = "optuna" },
     { name = "pandas" },
+    { name = "plotly" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "tabulate" },
     { name = "tqdm" },
 ]
 
@@ -1881,12 +1885,16 @@ dev = [
 ]
 remote = [
     { name = "kaggle", specifier = ">=2.1.2" },
+    { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "mlflow", specifier = ">=3.12.0" },
+    { name = "mlflow-export-import", specifier = ">=1.2.0" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "optuna", specifier = ">=4.9.0" },
     { name = "pandas", specifier = ">=2.2.0,<3" },
+    { name = "plotly", specifier = ">=5.0.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "scipy", specifier = ">=1.17.1" },
+    { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
 ]
 

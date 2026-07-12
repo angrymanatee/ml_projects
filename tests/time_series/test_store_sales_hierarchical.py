@@ -1,4 +1,4 @@
-"""Tests for StoreSalesFactorizedEncoder and its component modules."""
+"""Tests for StoreSalesHierarchicalEncoder and its component modules."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from time_series.store_sales import StoreData, StoreSalesFactorizedEncoder
+from time_series.store_sales import StoreData, StoreSalesHierarchicalEncoder
 from time_series.store_sales.models import InputProjection, TimeToSF
 
 N_STORES = 3
@@ -74,14 +74,14 @@ def test_time_to_sf_output_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# StoreSalesFactorizedEncoder — output shape
+# StoreSalesHierarchicalEncoder — output shape
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
-def model() -> StoreSalesFactorizedEncoder:
+def model() -> StoreSalesHierarchicalEncoder:
     torch.manual_seed(0)
-    return StoreSalesFactorizedEncoder(
+    return StoreSalesHierarchicalEncoder(
         n_stores=N_STORES,
         n_families=N_FAMILIES,
         n_output_steps=OUTPUT_LAGS,
@@ -97,31 +97,31 @@ def model() -> StoreSalesFactorizedEncoder:
     )
 
 
-def test_output_shape(model: StoreSalesFactorizedEncoder) -> None:
+def test_output_shape(model: StoreSalesHierarchicalEncoder) -> None:
     out = model(_det_input())
     assert out.shape == (BATCH, OUTPUT_LAGS, N_STORES, N_FAMILIES)
 
 
-def test_output_shape_batch_size_one(model: StoreSalesFactorizedEncoder) -> None:
+def test_output_shape_batch_size_one(model: StoreSalesHierarchicalEncoder) -> None:
     out = model(_det_input(batch=1))
     assert out.shape == (1, OUTPUT_LAGS, N_STORES, N_FAMILIES)
 
 
-def test_output_non_negative(model: StoreSalesFactorizedEncoder) -> None:
+def test_output_non_negative(model: StoreSalesHierarchicalEncoder) -> None:
     assert (model(_det_input()) >= 0).all()
 
 
-def test_no_nan_in_output(model: StoreSalesFactorizedEncoder) -> None:
+def test_no_nan_in_output(model: StoreSalesHierarchicalEncoder) -> None:
     assert not torch.isnan(model(_det_input())).any()
 
 
-def test_output_dtype_matches_input(model: StoreSalesFactorizedEncoder) -> None:
+def test_output_dtype_matches_input(model: StoreSalesHierarchicalEncoder) -> None:
     x = _det_input().to(torch.float32)
     assert model(x).dtype == torch.float32
 
 
 def test_different_inputs_produce_different_outputs(
-    model: StoreSalesFactorizedEncoder,
+    model: StoreSalesHierarchicalEncoder,
 ) -> None:
     was_training = model.training
     model.eval()
@@ -147,7 +147,7 @@ def test_dataloader_compatible(mock_data_dir: Path) -> None:
     x, _ = next(iter(loader))
     n_stores = ds.stores.shape[0]
     n_families = ds.families.size
-    m = StoreSalesFactorizedEncoder(
+    m = StoreSalesHierarchicalEncoder(
         n_stores=n_stores,
         n_families=n_families,
         n_output_steps=1,

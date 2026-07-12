@@ -1,17 +1,17 @@
-"""Train StoreSalesFactorizedEncoder on the Kaggle Store Sales dataset.
+"""Train StoreSalesHierarchicalEncoder on the Kaggle Store Sales dataset.
 
-Architecture: factorized two-stage encoder.
-  Stage 1 (time): process each (store, family) time series independently with a
-    TransformerEncoder, then mean-pool over time to get one vector per (store, family).
-  Stage 2 (store×family): run a TransformerEncoder across all (store, family) pairs,
-    flatten, and project to the output horizon.
+Architecture: two-stage hierarchical encoder.
+  Stage 1 (per-series): process each (store, family) time series independently with a
+    TransformerEncoder, then mean-pool over time to get one summary vector per (store, family).
+  Stage 2 (cross-series): run a TransformerEncoder across all (store, family) summary
+    embeddings, then project to the output horizon.
 Input shape:  [batch, window_lags, n_stores, n_families, n_input_channels]
 Output shape: [batch, output_lags, n_stores, n_families]
 Loss: RMSLE (via MSLELoss), logged to MLflow.
 
 Run with:
-    uv run python -m time_series.main_store_sales_factorized
-    uv run python -m time_series.main_store_sales_factorized --epochs 100 --d-model-time 128
+    uv run python -m time_series.main_store_sales_hierarchical
+    uv run python -m time_series.main_store_sales_hierarchical --epochs 100 --d-model-time 128
 """
 
 import argparse
@@ -28,7 +28,7 @@ from time_series.store_sales import (
     HOLIDAY_FEATURE_COLS,
     STORE_FEATURE_COLS,
     StoreData,
-    StoreSalesFactorizedEncoder,
+    StoreSalesHierarchicalEncoder,
     Trainer,
     get_device,
     make_loaders,
@@ -76,7 +76,7 @@ def train_and_eval(
     """
     train_loader, val_loader = make_loaders(store_data, split, config["batch_size"])
 
-    model = StoreSalesFactorizedEncoder(
+    model = StoreSalesHierarchicalEncoder(
         n_stores=store_data.stores.shape[0],
         n_families=store_data.families.size,
         n_output_steps=store_data.output_lags,
@@ -112,7 +112,7 @@ def train_and_eval(
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for hyperparameters and dataset options."""
-    parser = argparse.ArgumentParser(description="Train StoreSalesFactorizedEncoder")
+    parser = argparse.ArgumentParser(description="Train StoreSalesHierarchicalEncoder")
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument(
         "--save-every",
@@ -140,13 +140,13 @@ def parse_args() -> argparse.Namespace:
 
     # Time encoder
     parser.add_argument("--d-model-time", type=int, default=64)
-    parser.add_argument("--nhead-time", type=int, default=4)
+    parser.add_argument("--nhead-time", type=int, default=2)
     parser.add_argument("--num-layers-time", type=int, default=2)
     parser.add_argument("--dim-feedforward-time", type=int, default=256)
 
     # Store×family encoder
     parser.add_argument("--d-model-sf", type=int, default=64)
-    parser.add_argument("--nhead-sf", type=int, default=4)
+    parser.add_argument("--nhead-sf", type=int, default=2)
     parser.add_argument("--num-layers-sf", type=int, default=2)
     parser.add_argument("--dim-feedforward-sf", type=int, default=256)
 
@@ -190,7 +190,7 @@ def main() -> None:
     device = get_device()
 
     store_data = StoreData(
-        dtype=torch.float16,
+        dtype=torch.float32,
         window_lags=args.window_lags,
         include_oil=args.oil,
         include_onpromotion=args.onpromotion,
@@ -214,7 +214,7 @@ def main() -> None:
 
     mlflow.pytorch.autolog()
     mlflow.set_tracking_uri(TRACKING_URI)
-    mlflow.set_experiment("StoreSales_FactorizedEncoder")
+    mlflow.set_experiment("StoreSales_HierarchicalEncoder")
     mlflow.set_experiment_tags(
         {
             "dataset": "store-sales-kaggle",
@@ -226,7 +226,7 @@ def main() -> None:
 
     with mlflow.start_run(
         tags={
-            "architecture": "factorized-encoder",
+            "architecture": "hierarchical-encoder",
             "input_window_days": str(store_data.window_lags),
             "output_window_days": str(store_data.output_lags),
             "n_input_channels": str(store_data.n_input_channels),
@@ -260,6 +260,9 @@ def main() -> None:
                 ),
             }
         )
+        # bfloat16 on CUDA: same exponent range as float32, avoids overflow NaNs.
+        # float16 on MPS: required by MPS matmul accumulation rules.
+        autocast_dtype = torch.bfloat16 if device.type == "cuda" else torch.float16
         _val_loss, model, val_loader = train_and_eval(
             config=config,
             store_data=store_data,
@@ -267,7 +270,7 @@ def main() -> None:
             epochs=args.epochs,
             split=args.split,
             save_every=args.save_every,
-            autocast_dtype=torch.float16,
+            autocast_dtype=autocast_dtype,
         )
         StoreSalesAnalyzer(
             model=model,
