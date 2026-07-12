@@ -54,7 +54,9 @@ def sales_long_from_store_data(store_data) -> pd.DataFrame:
     alignment.
     """
     dates = pd.DatetimeIndex(store_data.dates)
-    stores = list(store_data.stores.index)
+    stores = sorted(
+        store_data.stores.index
+    )  # ascending store_nbr to match sales_tensor's sort_index(axis="columns") column order
     families = list(store_data.families)
     sales = np.asarray(store_data.sales_tensor)
     return pd.DataFrame(
@@ -86,7 +88,9 @@ def _calendar_features(dates: pd.Series) -> pd.DataFrame:
 def _promotion_long(store_data) -> pd.DataFrame:
     """Long-form onpromotion keyed by (date, store, family); zeros if absent."""
     dates = pd.DatetimeIndex(store_data.dates)
-    stores = list(store_data.stores.index)
+    stores = sorted(
+        store_data.stores.index
+    )  # ascending store_nbr to match sales_tensor's sort_index(axis="columns") column order
     families = list(store_data.families)
     if store_data.promotion_tensor is None:
         promo = np.zeros((len(dates), len(stores), len(families)))

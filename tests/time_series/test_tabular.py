@@ -72,3 +72,32 @@ def test_prediction_frame_has_no_target_and_horizon_rows(mock_data_dir) -> None:
     assert "target" not in frame.columns
     n_cells = store_data.stores.shape[0] * store_data.families.size
     assert len(frame) == config.horizon * n_cells
+
+
+def test_training_frame_lag_comes_from_origin_not_target(mock_data_dir) -> None:
+    """Verify that lag features source from origin_date, not target_date.
+
+    This test ensures no data leakage: lag_1 must equal sales from 1 day
+    BEFORE the origin_date, not from target_date.
+    """
+    store_data = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    config = FeatureConfig(lags=(1,), rolling_windows=(), horizon=1)
+    train_up_to = cast(pd.Timestamp, store_data.dates[-1])
+    frame = build_training_frame(store_data, config, train_up_to=train_up_to)
+    long = sales_long_from_store_data(store_data).set_index(
+        ["date", "store", "family"]
+    )["sales"]
+    dates_set = set(store_data.dates)
+
+    # for each surviving row, lag_1 must equal sales at (origin_date - 1 day, store, family)
+    for _, row in frame.iterrows():
+        origin_ts = cast(pd.Timestamp, row["origin_date"])
+        lag_source_date = origin_ts - pd.Timedelta(days=1)
+        if lag_source_date in dates_set:
+            expected = long.loc[(lag_source_date, row["store"], row["family"])]
+            assert row["lag_1"] == pytest.approx(float(expected)) or (
+                np.isnan(row["lag_1"]) and np.isnan(expected)
+            )
+        else:
+            # If lag source date is not in dataset, lag_1 should be NaN
+            assert np.isnan(row["lag_1"])
