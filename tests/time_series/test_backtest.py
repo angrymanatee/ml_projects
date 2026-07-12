@@ -104,6 +104,60 @@ def test_backtest_scores_all_folds_and_is_leak_free() -> None:
         assert cutoff < store_data.dates[-1]
 
 
+class _GapStoreData:
+    """Dates with a deliberate interior gap; each date's sales encode its ordinal."""
+
+    def __init__(self, drop: str = "2020-02-10") -> None:
+        full = pd.date_range("2020-01-01", periods=60, freq="D")
+        self.dates = full.delete(full.get_loc(pd.Timestamp(drop)))
+        ordinals = np.array([d.toordinal() for d in self.dates], dtype=float)
+        self.sales_tensor = ordinals.reshape(-1, 1, 1)  # unique value per date
+        self.families = pd.Index(["A"])
+
+
+class _DateOracleForecaster:
+    """Predicts each horizon step from its calendar target date (cutoff + h)."""
+
+    def __init__(self, horizon: int) -> None:
+        self._horizon = horizon
+        self._cutoff: pd.Timestamp | None = None
+
+    def fit(self, train_up_to: pd.Timestamp) -> None:
+        self._cutoff = pd.Timestamp(train_up_to)  # type: ignore[assignment]
+
+    def predict(self) -> np.ndarray:
+        assert self._cutoff is not None
+        grid = np.zeros((self._horizon, 1, 1))
+        for step in range(self._horizon):
+            target_date = self._cutoff + pd.Timedelta(days=step + 1)
+            grid[step, 0, 0] = float(target_date.toordinal())  # type: ignore[union-attr]
+        return grid
+
+
+def test_backtest_aligns_actuals_to_calendar_dates_across_gaps() -> None:
+    # The oracle predicts each target date's encoded value exactly. A correct
+    # harness aligns predictions to actuals by calendar date (dropping the gap
+    # day), so RMSLE is 0. Row-position slicing would shift actuals past the gap
+    # and score mismatched dates -> RMSLE > 0. n_folds=3 includes a fold whose
+    # 16-day window straddles the dropped 2020-02-10.
+    store_data = _GapStoreData()
+    config = BacktestConfig(n_folds=3, horizon=16, min_train_days=1)
+    result = backtest(lambda: _DateOracleForecaster(config.horizon), store_data, config)
+    assert len(result.per_fold) == 3
+    assert result.mean_rmsle == pytest.approx(0.0)
+
+
+def test_backtest_cutoff_on_missing_date_does_not_crash() -> None:
+    # A fold cutoff computed by calendar arithmetic can land on a date absent
+    # from the series; the harness must not index it by position (KeyError).
+    # last=2020-02-29, horizon=16 -> fold-0 cutoff = 2020-02-13, which we drop.
+    store_data = _GapStoreData(drop="2020-02-13")
+    config = BacktestConfig(n_folds=1, horizon=16, min_train_days=1)
+    result = backtest(lambda: _DateOracleForecaster(config.horizon), store_data, config)
+    assert len(result.per_fold) == 1
+    assert np.isfinite(result.mean_rmsle)
+
+
 def test_log_to_mlflow_records_summary_metrics(tmp_path) -> None:
     per_fold = pd.DataFrame(
         {

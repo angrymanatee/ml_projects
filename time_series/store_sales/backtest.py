@@ -131,6 +131,7 @@ def backtest(
     families = list(store_data.families)
     cutoffs = generate_fold_cutoffs(dates, config)
     date_to_index = {date: idx for idx, date in enumerate(dates)}
+    sales_tensor = np.asarray(store_data.sales_tensor)
 
     fold_rows: list[dict] = []
     horizon_rows: list[dict] = []
@@ -147,28 +148,43 @@ def backtest(
                 "feature horizon must equal the backtest horizon"
             )
 
-        start = date_to_index[cutoff] + 1
-        actual = np.asarray(store_data.sales_tensor)[start : start + config.horizon]
+        # Align actuals to each horizon step's calendar target date (cutoff + h
+        # days), not to tensor row-position: the Kaggle series omits some
+        # calendar days (e.g. Dec 25 every year), so a position slice would
+        # compare mismatched dates for any window straddling such a gap. Steps
+        # whose target date is absent from the series are dropped from scoring.
+        present_steps: list[int] = []
+        actual_rows: list[int] = []
+        for step in range(config.horizon):
+            target_date = pd.Timestamp(cutoff) + pd.Timedelta(days=step + 1)
+            row = date_to_index.get(target_date)
+            if row is None:
+                continue
+            present_steps.append(step)
+            actual_rows.append(row)
+
+        actual = sales_tensor[actual_rows]  # [n_present, n_stores, n_families]
+        predicted = prediction[present_steps]
 
         fold_rows.append(
-            {"fold": fold, "cutoff": cutoff, "rmsle": rmsle(actual, prediction)}
+            {"fold": fold, "cutoff": cutoff, "rmsle": rmsle(actual, predicted)}
         )
-        for step in range(config.horizon):
+        for local_index, step in enumerate(present_steps):
             horizon_rows.append(
                 {
                     "fold": fold,
                     "horizon_step": step + 1,
-                    "rmsle": rmsle(actual[step], prediction[step]),
+                    "rmsle": rmsle(actual[local_index], predicted[local_index]),
                 }
             )
         for family_index, family in enumerate(families):
-            horizon_slice_actual = actual[:, :, family_index]
-            horizon_slice_pred = prediction[:, :, family_index]
+            family_actual = actual[:, :, family_index]
+            family_pred = predicted[:, :, family_index]
             family_rows.append(
                 {
                     "fold": fold,
                     "family": family,
-                    "rmsle": rmsle(horizon_slice_actual, horizon_slice_pred),
+                    "rmsle": rmsle(family_actual, family_pred),
                 }
             )
 
