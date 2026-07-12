@@ -54,6 +54,7 @@ pass — adding new feature groups to `StoreData` does not require updating mode
 | `main_store_sales_baseline.py` | `HoldLastValue` | `StoreSales_Baseline` | done — sets lower bound |
 | `main_store_sales_transformer.py` | `StoreSalesTransformer` | `StoreSales_TransformerBasic` | superseded (decoder pathology, see `store_sales_transformer_notes.md`) |
 | `main_store_sales_encoder_only.py` | `StoreSalesEncoderOnly` | `StoreSales_TransformerEncoderOnly` | **current focus** |
+| `main_store_sales_lgbm.py` | `LightGBMForecaster` | `StoreSales_LightGBM` | ceiling — non-neural baseline |
 
 ### `StoreSalesEncoderOnly`
 
@@ -64,6 +65,37 @@ No causal masking. All encoder outputs projected to the full output horizon in o
 (no autoregression). Pooling: `ALL` (flatten all timesteps) or `LAST` (take final token).
 
 Key hyperparameters: `d_model`, `nhead`, `num_layers`, `dim_feedforward`, `pooling_mode`.
+
+### `LightGBMForecaster`
+
+One global LightGBM model over all 54×33 series and all horizon steps at once
+(horizon-as-feature, direct multi-horizon — no autoregression, no per-horizon
+models). Trained on `log1p(sales)` with L2, which is exactly RMSLE; predictions
+are `expm1`'d and clipped at 0. Features come from `time_series/store_sales/tabular.py`:
+historical lag/rolling features computed **as-of each row's origin** (never seeing
+the target day), known-future calendar/promotion/holiday features as-of the target
+day, and static store/family categoricals (native LightGBM categorical handling).
+`LGBMParams.objective` defaults to `"regression"`; set it to `"tweedie"` for the
+Tweedie challenger with no other code change. Import `LightGBMForecaster`/`LGBMParams`
+from `time_series.store_sales.lgbm` (not the package root — that keeps `lightgbm`
+out of the torch-only import path).
+
+---
+
+## Backtest Harness
+
+`time_series/store_sales/backtest.py` — model-agnostic rolling-origin
+(sliding-window) evaluation. `n_folds` disjoint `horizon`-day test blocks march
+backward from the end of the series, each with an expanding training window that
+ends the day before its block. Any model implementing the `Forecaster` protocol
+(`fit(train_up_to)`, `predict() -> [horizon, 54, 33]`) plugs in, so neural and
+LightGBM models are compared apples-to-apples. A leakage guard asserts each fold
+trains only on data strictly before its test block.
+
+`BacktestResult` reports per-fold and mean±std `RMSLE` (and `MSLE = RMSLE²`, to
+line up with the neural models' `MSLELoss`), plus per-horizon and per-family
+breakdowns. `BacktestResult.log_to_mlflow()` records the summary metrics to the
+active run.
 
 ---
 
@@ -103,6 +135,9 @@ uv run python -m time_series.main_store_sales_encoder_only \
 
 # Hyperparameter search
 uv run python -m time_series.tune_store_sales_encoder_only --n-trials 40 --epochs-per-trial 30
+
+# LightGBM ceiling (runs locally, CPU, minutes)
+uv run python -m time_series.main_store_sales_lgbm --n-folds 5 --horizon 16
 ```
 
 ---
