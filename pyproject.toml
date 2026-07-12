@@ -25,6 +25,7 @@ dependencies = [
     "pyyaml>=6.0",
     "mlflow-export-import>=1.2.0",
     "tabulate>=0.10.0",
+    "lightgbm>=4.6.0",
 ]
 
 [dependency-groups]
@@ -52,6 +53,7 @@ remote = [
     "kaggle>=2.1.2",
     "plotly>=5.0.0",
     "matplotlib>=3.10.9",
+    "lightgbm>=4.6.0",
 ]
 # torch / torchvision / torchaudio intentionally excluded — provided by RunPod pod image
 
