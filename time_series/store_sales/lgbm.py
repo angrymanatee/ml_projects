@@ -51,6 +51,7 @@ class LightGBMForecaster:
         self._feature_config = feature_config
         self._params = params
         self._model: lgb.LGBMRegressor | None = None
+        self._fit_cutoff: pd.Timestamp | None = None
         self._feature_columns = _model_feature_columns(feature_config)
         self._stores = sorted(store_data.stores.index)
         self._families = list(store_data.families)
@@ -58,6 +59,7 @@ class LightGBMForecaster:
     def fit(self, train_up_to: pd.Timestamp) -> None:
         """Build the training frame up to `train_up_to` and fit one global model."""
         cutoff: pd.Timestamp = pd.Timestamp(train_up_to)  # type: ignore[assignment]
+        self._fit_cutoff = cutoff
         frame = build_training_frame(self._store_data, self._feature_config, cutoff)
         x = self._prepare(frame)
         y = frame["target"].to_numpy()
@@ -77,11 +79,19 @@ class LightGBMForecaster:
         self._model.fit(x, y)
 
     def predict(self) -> np.ndarray:
-        """Predict the next horizon from the last observed date, in sales space."""
-        if self._model is None:
+        """Predict horizon days from the fit cutoff (origin), in sales space.
+
+        The origin is the `train_up_to` cutoff passed to `fit`, not the last
+        observed date: the backtest scores each fold's predictions against the
+        actuals immediately following that fold's cutoff, so predicting from
+        any other origin would compare mismatched date ranges. For a true
+        out-of-sample forecast, call `fit(last_observed_date)` first.
+        """
+        if self._model is None or self._fit_cutoff is None:
             raise RuntimeError("fit must be called before predict")
-        origin: pd.Timestamp = pd.Timestamp(self._store_data.dates[-1])  # type: ignore[assignment]
-        frame = build_prediction_frame(self._store_data, self._feature_config, origin)
+        frame = build_prediction_frame(
+            self._store_data, self._feature_config, self._fit_cutoff
+        )
         preds_log = np.asarray(self._model.predict(self._prepare(frame)))
         frame = frame.assign(pred=np.clip(np.expm1(preds_log), a_min=0.0, a_max=None))
         return self._to_grid(frame)

@@ -140,6 +140,12 @@ def backtest(
         forecaster = forecaster_factory()
         forecaster.fit(pd.Timestamp(cutoff))  # type: ignore[arg-type]
         prediction = np.asarray(forecaster.predict())  # [horizon, n_stores, n_families]
+        if prediction.shape[0] != config.horizon:
+            raise ValueError(
+                f"forecaster returned {prediction.shape[0]} horizon steps but "
+                f"BacktestConfig.horizon is {config.horizon}; the forecaster's "
+                "feature horizon must equal the backtest horizon"
+            )
 
         start = date_to_index[cutoff] + 1
         actual = np.asarray(store_data.sales_tensor)[start : start + config.horizon]
