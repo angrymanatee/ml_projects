@@ -26,7 +26,8 @@ class BacktestConfig:
     n_folds: number of disjoint predict blocks.
     horizon: forecast length per fold (competition uses 16 days).
     min_train_days: a fold is dropped unless at least this many distinct
-        dates precede its cutoff, so early folds are not trained on too little.
+        dates are available for training (dates <= cutoff, including the cutoff
+        date itself, since the cutoff date's data is used for training).
     """
 
     n_folds: int = 5
@@ -41,7 +42,8 @@ def generate_fold_cutoffs(
 
     The predict block for cutoff D is D+1 … D+horizon. Blocks are disjoint
     (stride = horizon) and march backward from the last available date. Folds
-    with fewer than min_train_days dates before the cutoff are dropped.
+    with fewer than min_train_days dates up to and including the cutoff
+    (<=, since cutoff date's data is used for training) are dropped.
     """
     ordered = pd.DatetimeIndex(dates).sort_values().unique()
     last = ordered[-1]
