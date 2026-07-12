@@ -6,15 +6,12 @@ Run with:
 
 from __future__ import annotations
 
-import os
-
-# torch and lightgbm each bundle their own libomp; with both loaded a torch op
-# (StoreData builds tensors via `.to(dtype)`) deadlocks at the OpenMP join
-# barrier. These must be set before either library initializes its OMP runtime,
-# so they precede the imports below. See the rootdir conftest.py for the same
-# guard on the test path.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+# common.openmp_guard sets the OMP env vars that prevent a torch/lightgbm libomp
+# deadlock; it must run before StoreData (torch) or lightgbm load, so it comes
+# first and isort must not reorder it. See common/openmp_guard.py.
+# isort: off
+import common.openmp_guard  # noqa: F401
+# isort: on
 
 import argparse  # noqa: E402
 

@@ -7,16 +7,14 @@ in one process two distinct failures appear, and each needs its own guard:
     first. Importing lightgbm here, before pytest collects (and therefore
     imports) any test module, guarantees it loads first.
   * A plain torch op (e.g. `_to_copy`) otherwise deadlocks at the OpenMP
-    fork/join barrier, hanging the whole session. Forcing a single OMP thread
-    and tolerating the duplicate runtime avoids that; both env vars must be set
-    before either library initializes its OMP runtime.
+    fork/join barrier, hanging the whole session. common.openmp_guard sets the
+    OMP env vars (single thread + duplicate-runtime tolerance) that avoid that.
 
-The rootdir conftest is the earliest hook that runs for every test session.
+Both imports must precede any torch/lightgbm load, so isort must not reorder
+them. The rootdir conftest is the earliest hook that runs for every session.
 """
 
-import os
-
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
-import lightgbm  # noqa: E402, F401
+# isort: off
+import common.openmp_guard  # noqa: F401  (sets OMP env before torch/lightgbm load)
+import lightgbm  # noqa: F401
+# isort: on
