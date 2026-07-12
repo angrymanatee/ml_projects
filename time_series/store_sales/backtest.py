@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -55,3 +56,34 @@ def generate_fold_cutoffs(
             continue
         cutoffs.append(cutoff_ts)
     return sorted(cutoffs)
+
+
+@runtime_checkable
+class Forecaster(Protocol):
+    """A model that fits on data up to a cutoff and predicts the next horizon.
+
+    Implementations own their own data source and slice internally at
+    `train_up_to`; the harness only passes the cutoff timestamp. `predict`
+    returns sales-space forecasts shaped [horizon, n_stores, n_families],
+    with store/family axes ordered to match StoreData.
+    """
+
+    def fit(self, train_up_to: pd.Timestamp) -> None: ...
+    def predict(self) -> np.ndarray: ...
+
+
+@dataclass
+class BacktestResult:
+    """Aggregated backtest metrics across folds."""
+
+    per_fold: pd.DataFrame
+    per_horizon: pd.DataFrame
+    per_family: pd.DataFrame
+
+    @property
+    def mean_rmsle(self) -> float:
+        return float(self.per_fold["rmsle"].mean())
+
+    @property
+    def std_rmsle(self) -> float:
+        return float(self.per_fold["rmsle"].std(ddof=1))

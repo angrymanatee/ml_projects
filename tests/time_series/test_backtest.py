@@ -46,3 +46,20 @@ def test_fold_cutoffs_respects_min_train_days() -> None:
     for cutoff in cutoffs:
         n_before = (dates <= cutoff).sum()
         assert n_before >= 40
+
+
+def test_backtest_result_mean_and_std() -> None:
+    from time_series.store_sales.backtest import BacktestResult
+
+    per_fold = pd.DataFrame(
+        {
+            "fold": [0, 1, 2],
+            "cutoff": pd.to_datetime(["2020-01-01"] * 3),
+            "rmsle": [1.0, 2.0, 3.0],
+        }
+    )
+    result = BacktestResult(
+        per_fold=per_fold, per_horizon=pd.DataFrame(), per_family=pd.DataFrame()
+    )
+    assert result.mean_rmsle == pytest.approx(2.0)
+    assert result.std_rmsle == pytest.approx(np.std([1.0, 2.0, 3.0], ddof=1))
