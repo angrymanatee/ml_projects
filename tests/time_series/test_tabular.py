@@ -52,7 +52,7 @@ def test_national_holiday_dates_matches_neural_semantics() -> None:
         }
     )
     holidays = holidays.set_index(pd.DatetimeIndex(holidays["date"]))
-    result = _national_holiday_dates(_HolidayStub(holidays))
+    result = _national_holiday_dates(_HolidayStub(holidays))  # type: ignore[arg-type]
 
     assert pd.Timestamp("2016-05-01") not in result  # transferred away
     assert pd.Timestamp("2016-05-02") in result  # Transfer observance

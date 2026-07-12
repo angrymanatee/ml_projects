@@ -6,12 +6,15 @@ import os
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
 
 import mlflow
+
+if TYPE_CHECKING:
+    from time_series.store_sales.data import StoreData
 
 
 def rmsle(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -119,7 +122,7 @@ class BacktestResult:
 
 def backtest(
     forecaster_factory: Callable[[], Forecaster],
-    store_data,
+    store_data: StoreData,
     config: BacktestConfig,
 ) -> BacktestResult:
     """Run rolling-origin backtesting, returning aggregated RMSLE metrics.

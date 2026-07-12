@@ -94,7 +94,7 @@ def test_backtest_scores_all_folds_and_is_leak_free() -> None:
     seen_cutoffs: list[pd.Timestamp] = []
     config = BacktestConfig(n_folds=3, horizon=16, min_train_days=1)
 
-    result = backtest(lambda: _ConstantForecaster(seen_cutoffs), store_data, config)
+    result = backtest(lambda: _ConstantForecaster(seen_cutoffs), store_data, config)  # type: ignore[arg-type]
 
     assert len(result.per_fold) == 3
     # perfect constant prediction -> RMSLE 0 everywhere
@@ -142,7 +142,7 @@ def test_backtest_aligns_actuals_to_calendar_dates_across_gaps() -> None:
     # 16-day window straddles the dropped 2020-02-10.
     store_data = _GapStoreData()
     config = BacktestConfig(n_folds=3, horizon=16, min_train_days=1)
-    result = backtest(lambda: _DateOracleForecaster(config.horizon), store_data, config)
+    result = backtest(lambda: _DateOracleForecaster(config.horizon), store_data, config)  # type: ignore[arg-type]
     assert len(result.per_fold) == 3
     assert result.mean_rmsle == pytest.approx(0.0)
 
@@ -153,7 +153,7 @@ def test_backtest_cutoff_on_missing_date_does_not_crash() -> None:
     # last=2020-02-29, horizon=16 -> fold-0 cutoff = 2020-02-13, which we drop.
     store_data = _GapStoreData(drop="2020-02-13")
     config = BacktestConfig(n_folds=1, horizon=16, min_train_days=1)
-    result = backtest(lambda: _DateOracleForecaster(config.horizon), store_data, config)
+    result = backtest(lambda: _DateOracleForecaster(config.horizon), store_data, config)  # type: ignore[arg-type]
     assert len(result.per_fold) == 1
     assert np.isfinite(result.mean_rmsle)
 

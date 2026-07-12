@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from time_series.store_sales.data import StoreData
 
 CATEGORICAL_COLUMNS: list[str] = ["store", "family", "city", "state", "type", "cluster"]
 
@@ -45,7 +49,7 @@ def add_origin_features(
     return df
 
 
-def sales_long_from_store_data(store_data) -> pd.DataFrame:
+def sales_long_from_store_data(store_data: StoreData) -> pd.DataFrame:
     """Melt sales_tensor [T, n_stores, n_families] into long form.
 
     Column order in the tensor is (date, store, family) per StoreData's
@@ -85,7 +89,7 @@ def _calendar_features(dates: pd.Series) -> pd.DataFrame:
     )
 
 
-def _promotion_long(store_data) -> pd.DataFrame:
+def _promotion_long(store_data: StoreData) -> pd.DataFrame:
     """Long-form onpromotion keyed by (date, store, family); zeros if absent."""
     dates = pd.DatetimeIndex(store_data.dates)
     stores = sorted(
@@ -106,7 +110,7 @@ def _promotion_long(store_data) -> pd.DataFrame:
     )
 
 
-def _store_family_grid(store_data) -> pd.DataFrame:
+def _store_family_grid(store_data: StoreData) -> pd.DataFrame:
     """Every (store, family) pair, stores ascending by store_nbr (tensor order)."""
     stores = sorted(store_data.stores.index)
     families = list(store_data.families)
@@ -118,7 +122,7 @@ def _store_family_grid(store_data) -> pd.DataFrame:
     )
 
 
-def _national_holiday_dates(store_data) -> set[pd.Timestamp]:
+def _national_holiday_dates(store_data: StoreData) -> set[pd.Timestamp]:
     """Normalized dates of national holidays, matching StoreData's national_holiday.
 
     A date counts as a national holiday when it is a National `Holiday` that was
@@ -138,7 +142,7 @@ def _national_holiday_dates(store_data) -> set[pd.Timestamp]:
 
 
 def _feature_frame(
-    store_data, config: FeatureConfig, origins_and_horizons: pd.DataFrame
+    store_data: StoreData, config: FeatureConfig, origins_and_horizons: pd.DataFrame
 ) -> pd.DataFrame:
     """Core builder shared by training and prediction frames.
 
@@ -201,7 +205,7 @@ def _model_feature_columns(config: FeatureConfig) -> list[str]:
 
 
 def build_training_frame(
-    store_data, config: FeatureConfig, train_up_to: pd.Timestamp
+    store_data: StoreData, config: FeatureConfig, train_up_to: pd.Timestamp
 ) -> pd.DataFrame:
     """One row per (target_date t <= cutoff, store, family, horizon h).
 
@@ -259,7 +263,7 @@ def build_training_frame(
 
 
 def build_prediction_frame(
-    store_data, config: FeatureConfig, origin: pd.Timestamp
+    store_data: StoreData, config: FeatureConfig, origin: pd.Timestamp
 ) -> pd.DataFrame:
     """Rows for a single origin at h = 1..horizon; target days origin+1..origin+horizon.
 

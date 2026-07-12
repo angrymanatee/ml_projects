@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import lightgbm as lgb
 import numpy as np
@@ -15,6 +16,9 @@ from time_series.store_sales.tabular import (
     build_prediction_frame,
     build_training_frame,
 )
+
+if TYPE_CHECKING:
+    from time_series.store_sales.data import StoreData
 
 
 @dataclass
@@ -45,7 +49,7 @@ class LightGBMForecaster:
     """
 
     def __init__(
-        self, store_data, feature_config: FeatureConfig, params: LGBMParams
+        self, store_data: StoreData, feature_config: FeatureConfig, params: LGBMParams
     ) -> None:
         self._store_data = store_data
         self._feature_config = feature_config
