@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -87,3 +88,59 @@ class BacktestResult:
     @property
     def std_rmsle(self) -> float:
         return float(self.per_fold["rmsle"].std(ddof=1))
+
+
+def backtest(
+    forecaster_factory: Callable[[], Forecaster],
+    store_data,
+    config: BacktestConfig,
+) -> BacktestResult:
+    """Run rolling-origin backtesting, returning aggregated RMSLE metrics.
+
+    A fresh forecaster is built per fold (no cross-fold leakage). `store_data`
+    is used only for the date axis (fold generation) and actuals lookup.
+    """
+    dates = pd.DatetimeIndex(store_data.dates)
+    families = list(store_data.families)
+    cutoffs = generate_fold_cutoffs(dates, config)
+    date_to_index = {date: idx for idx, date in enumerate(dates)}
+
+    fold_rows: list[dict] = []
+    horizon_rows: list[dict] = []
+    family_rows: list[dict] = []
+
+    for fold, cutoff in enumerate(cutoffs):
+        forecaster = forecaster_factory()
+        forecaster.fit(pd.Timestamp(cutoff))  # type: ignore[arg-type]
+        prediction = np.asarray(forecaster.predict())  # [horizon, n_stores, n_families]
+
+        start = date_to_index[cutoff] + 1
+        actual = np.asarray(store_data.sales_tensor)[start : start + config.horizon]
+
+        fold_rows.append(
+            {"fold": fold, "cutoff": cutoff, "rmsle": rmsle(actual, prediction)}
+        )
+        for step in range(config.horizon):
+            horizon_rows.append(
+                {
+                    "fold": fold,
+                    "horizon_step": step + 1,
+                    "rmsle": rmsle(actual[step], prediction[step]),
+                }
+            )
+        for family_index, family in enumerate(families):
+            horizon_slice_actual = actual[:, :, family_index]
+            horizon_slice_pred = prediction[:, :, family_index]
+            family_rows.append(
+                {
+                    "fold": fold,
+                    "family": family,
+                    "rmsle": rmsle(horizon_slice_actual, horizon_slice_pred),
+                }
+            )
+
+    return BacktestResult(
+        per_fold=pd.DataFrame(fold_rows),
+        per_horizon=pd.DataFrame(horizon_rows),
+        per_family=pd.DataFrame(family_rows),
+    )

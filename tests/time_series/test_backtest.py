@@ -4,6 +4,7 @@ import pytest
 
 from time_series.store_sales.backtest import (
     BacktestConfig,
+    backtest,
     generate_fold_cutoffs,
     rmsle,
 )
@@ -63,3 +64,39 @@ def test_backtest_result_mean_and_std() -> None:
     )
     assert result.mean_rmsle == pytest.approx(2.0)
     assert result.std_rmsle == pytest.approx(np.std([1.0, 2.0, 3.0], ddof=1))
+
+
+class _FakeStoreData:
+    """Minimal stand-in exposing the attributes backtest() reads."""
+
+    def __init__(self) -> None:
+        self.dates = pd.date_range("2020-01-01", periods=80, freq="D")
+        # sales_tensor [T, n_stores, n_families]; constant so RMSLE is predictable
+        self.sales_tensor = np.full((80, 2, 2), 5.0)
+        self.families = pd.Index(["A", "B"])
+
+
+class _ConstantForecaster:
+    def __init__(self, spy: list[pd.Timestamp]) -> None:
+        self._spy = spy
+
+    def fit(self, train_up_to: pd.Timestamp) -> None:
+        self._spy.append(train_up_to)
+
+    def predict(self) -> np.ndarray:
+        return np.full((16, 2, 2), 5.0)  # perfect: matches constant sales
+
+
+def test_backtest_scores_all_folds_and_is_leak_free() -> None:
+    store_data = _FakeStoreData()
+    seen_cutoffs: list[pd.Timestamp] = []
+    config = BacktestConfig(n_folds=3, horizon=16, min_train_days=1)
+
+    result = backtest(lambda: _ConstantForecaster(seen_cutoffs), store_data, config)
+
+    assert len(result.per_fold) == 3
+    # perfect constant prediction -> RMSLE 0 everywhere
+    assert result.mean_rmsle == pytest.approx(0.0)
+    # leakage guard: every cutoff handed to fit is strictly before its predict block
+    for cutoff in seen_cutoffs:
+        assert cutoff < store_data.dates[-1]
