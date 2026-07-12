@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
+
+import mlflow
 
 
 def rmsle(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -88,6 +92,29 @@ class BacktestResult:
     @property
     def std_rmsle(self) -> float:
         return float(self.per_fold["rmsle"].std(ddof=1))
+
+    def log_to_mlflow(self) -> None:
+        """Log aggregate/per-horizon/per-family metrics to the active MLflow run.
+
+        Logs msle_mean (= rmsle_mean**2) so these runs are directly comparable
+        to the transformer experiments, which log MSLE.
+        """
+        mlflow.log_metric("rmsle_mean", self.mean_rmsle)
+        mlflow.log_metric("rmsle_std", self.std_rmsle)
+        mlflow.log_metric("msle_mean", self.mean_rmsle**2)
+
+        by_step = self.per_horizon.groupby("horizon_step")["rmsle"].mean()
+        for step, value in by_step.items():
+            mlflow.log_metric(
+                "rmsle_by_horizon",
+                float(value),
+                step=int(step),  # type: ignore[arg-type]
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "per_family_rmsle.csv")
+            self.per_family.groupby("family")["rmsle"].mean().to_csv(path)
+            mlflow.log_artifact(path)
 
 
 def backtest(

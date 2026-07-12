@@ -2,8 +2,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import mlflow
 from time_series.store_sales.backtest import (
     BacktestConfig,
+    BacktestResult,
     backtest,
     generate_fold_cutoffs,
     rmsle,
@@ -100,3 +102,30 @@ def test_backtest_scores_all_folds_and_is_leak_free() -> None:
     # leakage guard: every cutoff handed to fit is strictly before its predict block
     for cutoff in seen_cutoffs:
         assert cutoff < store_data.dates[-1]
+
+
+def test_log_to_mlflow_records_summary_metrics(tmp_path) -> None:
+    per_fold = pd.DataFrame(
+        {
+            "fold": [0, 1],
+            "cutoff": pd.to_datetime(["2020-01-01", "2020-01-17"]),
+            "rmsle": [0.8, 1.0],
+        }
+    )
+    per_horizon = pd.DataFrame(
+        {"fold": [0, 0], "horizon_step": [1, 2], "rmsle": [0.7, 0.9]}
+    )
+    per_family = pd.DataFrame({"fold": [0], "family": ["A"], "rmsle": [0.85]})
+    result = BacktestResult(
+        per_fold=per_fold, per_horizon=per_horizon, per_family=per_family
+    )
+
+    mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
+    mlflow.set_experiment("test_backtest_logging")
+    with mlflow.start_run() as run:
+        result.log_to_mlflow()
+
+    client = mlflow.tracking.MlflowClient()
+    logged = client.get_run(run.info.run_id).data.metrics
+    assert logged["rmsle_mean"] == pytest.approx(0.9)
+    assert logged["msle_mean"] == pytest.approx(0.81)
