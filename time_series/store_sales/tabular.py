@@ -207,9 +207,9 @@ def build_training_frame(
 
     origin = t - h days; rows whose origin falls outside the observed date
     range are dropped (no lag features would be computable). target =
-    log1p(sales[t]). Rows missing the deepest configured lag are dropped, since
-    those rows have incomplete history and would otherwise silently train on NaN
-    lag features.
+    log1p(sales[t]). Rows missing the deepest configured lag or rolling window
+    are dropped, since those rows have incomplete history and would otherwise
+    silently train on NaN features.
     """
     dates = pd.DatetimeIndex(store_data.dates)
     train_dates = dates[dates <= pd.Timestamp(train_up_to)]
@@ -240,8 +240,21 @@ def build_training_frame(
     origins["target"] = np.log1p(origins.pop("sales"))
 
     frame = _feature_frame(store_data, config, origins)
+    # Drop rows lacking the deepest configured feature. Checking both the
+    # deepest lag and deepest rolling window (rather than the lag alone) covers
+    # configs where max(rolling_windows) needs more history than max(lags).
+    incomplete_history_cols: list[str] = []
     if config.lags:
-        frame = frame.dropna(subset=[f"lag_{max(config.lags)}"])
+        incomplete_history_cols.append(f"lag_{max(config.lags)}")
+    if config.rolling_windows:
+        incomplete_history_cols.append(f"roll_{max(config.rolling_windows)}_mean")
+    if incomplete_history_cols:
+        frame = frame.dropna(subset=incomplete_history_cols)
+    if frame.empty:
+        raise ValueError(
+            f"no training rows for cutoff {pd.Timestamp(train_up_to).date()}: "
+            "the horizon and lag/rolling depth exceed the available history"
+        )
     return frame
 
 

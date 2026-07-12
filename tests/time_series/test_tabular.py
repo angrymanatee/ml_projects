@@ -20,6 +20,24 @@ class _HolidayStub:
         self.holidays = holidays
 
 
+def test_build_training_frame_drops_incomplete_rolling_rows(mock_data_dir) -> None:
+    # With lags=() the deepest-history column is the rolling window; rows whose
+    # window is not yet full (roll_2_mean NaN) must be dropped even though there
+    # is no lag column to key the dropna on.
+    store_data = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    config = FeatureConfig(lags=(), rolling_windows=(2,), horizon=1)
+    frame = build_training_frame(store_data, config, pd.Timestamp("2013-01-03"))  # type: ignore[arg-type]
+    assert len(frame) > 0
+    assert not bool(frame["roll_2_mean"].isna().any())
+
+
+def test_build_training_frame_empty_window_raises(mock_data_dir) -> None:
+    store_data = StoreData(window_lags=1, output_lags=1, data_dir=mock_data_dir)
+    config = FeatureConfig(lags=(1,), rolling_windows=(), horizon=1)
+    with pytest.raises(ValueError, match="no training rows"):
+        build_training_frame(store_data, config, pd.Timestamp("2012-01-01"))  # type: ignore[arg-type]
+
+
 def test_national_holiday_dates_matches_neural_semantics() -> None:
     # Mirrors data.py's national_holiday: exclude transferred-away Holidays and
     # non-holiday national rows (Event/Work Day); include Transfer observances.
