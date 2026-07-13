@@ -40,11 +40,22 @@ def add_origin_features(
     for window in config.rolling_windows:
         # shift(1) is unnecessary: the window ends at the current date (origin),
         # which is allowed — origin sales are known at prediction time.
+        # pandas' rolling reductions upcast to float64 regardless of input dtype;
+        # downcast back to float32 to keep the (dates x stores x families x
+        # horizon) cross product's memory footprint manageable at full scale.
         roll = grouped.rolling(window, min_periods=window)
-        df[f"roll_{window}_mean"] = roll.mean().reset_index(level=[0, 1], drop=True)
-        df[f"roll_{window}_std"] = roll.std().reset_index(level=[0, 1], drop=True)
-        df[f"roll_{window}_min"] = roll.min().reset_index(level=[0, 1], drop=True)
-        df[f"roll_{window}_max"] = roll.max().reset_index(level=[0, 1], drop=True)
+        df[f"roll_{window}_mean"] = (
+            roll.mean().reset_index(level=[0, 1], drop=True).astype("float32")
+        )
+        df[f"roll_{window}_std"] = (
+            roll.std().reset_index(level=[0, 1], drop=True).astype("float32")
+        )
+        df[f"roll_{window}_min"] = (
+            roll.min().reset_index(level=[0, 1], drop=True).astype("float32")
+        )
+        df[f"roll_{window}_max"] = (
+            roll.max().reset_index(level=[0, 1], drop=True).astype("float32")
+        )
 
     return df
 
@@ -216,7 +227,13 @@ def _feature_frame(
         static[["store", "city", "state", "type", "cluster"]], on="store", how="left"
     )
 
-    frame["horizon_step"] = frame["horizon_step"].astype(int)
+    frame["horizon_step"] = frame["horizon_step"].astype("int16")
+    # store/family/city/state/type/cluster are low-cardinality and repeated across
+    # every date x horizon-step combination; category dtype turns each into a
+    # small integer code instead of a full Python string/object per row, which is
+    # the difference between the full cross product fitting in memory or not.
+    for column in CATEGORICAL_COLUMNS:
+        frame[column] = frame[column].astype("category")
     return frame
 
 
