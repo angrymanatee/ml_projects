@@ -11,11 +11,11 @@ Run with:
 
 import argparse
 
+import mlflow
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import MSLELoss
@@ -193,8 +193,11 @@ def main() -> None:
 
     device = get_device()
 
+    # float32 + no autocast: raw sales counts run up to ~26000 and aren't
+    # normalized before input_proj, so fp16 compute overflows to inf before
+    # the model converges (val loss stalls, train loss goes inf).
     store_data = StoreData(
-        dtype=torch.float16,
+        dtype=torch.float32,
         include_oil=args.oil,
         include_onpromotion=args.onpromotion,
         store_feature_cols=args.store_features,
@@ -262,7 +265,7 @@ def main() -> None:
             epochs=args.epochs,
             split=args.split,
             save_every=args.save_every,
-            autocast_dtype=torch.float16,
+            autocast_dtype=None,
         )
         StoreSalesAnalyzer(
             model=model,
@@ -270,6 +273,7 @@ def main() -> None:
             stores=store_data.stores,
             families=store_data.families,
             device=device,
+            autocast_dtype=None,
         ).run()
 
 

@@ -6,11 +6,13 @@ notebooks and can be exported via ``fig.write_html`` / ``fig.write_image``.
 
 from __future__ import annotations
 
+import contextlib
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
+import mlflow
 import numpy as np
 import pandas as pd
 import plotly.colors
@@ -19,8 +21,6 @@ import torch
 from plotly.subplots import make_subplots
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
-
-import mlflow
 
 _COLOR_CYCLE = plotly.colors.qualitative.Plotly
 
@@ -318,6 +318,9 @@ class StoreSalesAnalyzer:
         families: Index mapping column position to family name (from
             StoreData.families).
         device: device on which to run inference.
+        autocast_dtype: if set, wraps inference in torch.autocast with this dtype.
+            Must match the dtype training used — mixing a float16 input against
+            plain float32 weights on MPS without autocast crashes the process.
     """
 
     def __init__(
@@ -327,12 +330,14 @@ class StoreSalesAnalyzer:
         stores: pd.DataFrame,
         families: pd.Index,
         device: torch.device,
+        autocast_dtype: torch.dtype | None = None,
     ) -> None:
         self.model = model
         self.data_loader = data_loader
         self.stores = stores
         self.families = families
         self.device = device
+        self.autocast_dtype = autocast_dtype
 
     def run(self) -> None:
         """Generate all analysis plots and log them to the active MLflow run."""
@@ -357,10 +362,16 @@ class StoreSalesAnalyzer:
         self.model.eval()
         all_predictions: list[Tensor] = []
         all_targets: list[Tensor] = []
-        for batch_X, batch_y in self.data_loader:
-            pred = self.model(batch_X.to(self.device))
-            all_predictions.append(pred.cpu())
-            all_targets.append(batch_y.cpu())
+        autocast = (
+            torch.autocast(device_type=self.device.type, dtype=self.autocast_dtype)
+            if self.autocast_dtype is not None
+            else contextlib.nullcontext()
+        )
+        with autocast:
+            for batch_X, batch_y in self.data_loader:
+                pred = self.model(batch_X.to(self.device))
+                all_predictions.append(pred.cpu())
+                all_targets.append(batch_y.cpu())
         return torch.cat(all_predictions), torch.cat(all_targets)
 
     @staticmethod

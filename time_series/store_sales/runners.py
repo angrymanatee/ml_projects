@@ -3,6 +3,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import mlflow
 import torch
 from torch import Tensor, nn
 from torch.optim import AdamW
@@ -10,7 +11,6 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
-import mlflow
 from common.modules import MSLELoss
 
 from .data import StoreData
@@ -84,6 +84,14 @@ class Trainer:
         self.save_checkpoints = save_checkpoints
         self.log_metrics = log_metrics
         self.autocast_dtype = autocast_dtype
+        # float16 gradients underflow to zero without loss scaling, silently
+        # stalling training; GradScaler also skips optimizer steps on inf/nan
+        # gradients rather than corrupting the weights.
+        self.scaler = (
+            torch.amp.GradScaler(device=device.type)
+            if autocast_dtype == torch.float16
+            else None
+        )
 
     def train(self, epochs: int, save_every_n_epochs: int | None = None) -> float:
         """Run the full training loop for `epochs` epochs.
@@ -141,8 +149,13 @@ class Trainer:
         for batch_X, batch_y in self.train_loader:
             self.optim.zero_grad()
             loss = self._run_loss(batch_X.to(self.device), batch_y.to(self.device))
-            loss.backward()
-            self.optim.step()
+            if self.scaler is not None:
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optim)
+                self.scaler.update()
+            else:
+                loss.backward()
+                self.optim.step()
             n_samples += batch_X.shape[0]
         self._synchronize()
         elapsed = time.perf_counter() - start_time
