@@ -76,6 +76,15 @@ class LightGBMForecaster:
             colsample_bytree=self._params.feature_fraction,
             random_state=self._params.seed,
             verbose=-1,
+            # LightGBM sets its own OpenMP thread count internally from n_jobs,
+            # independent of (and not capped by) the process's OMP_NUM_THREADS
+            # env var (see common/openmp_guard.py). At real data scale with the
+            # sklearn default (n_jobs=-1, all cores), multi-threaded dataset
+            # binning segfaults inside LightGBM::BinMapper::FindBin because two
+            # libomp runtimes (torch's and lightgbm's) are both live in the
+            # process. n_jobs=1 avoids spawning LightGBM's OpenMP worker threads
+            # at all, which is the only guard that actually prevents the crash.
+            n_jobs=1,
         )
         # categorical_feature is intentionally omitted: LightGBM auto-detects
         # pandas `category`-dtype columns (set in _prepare), and passing it
