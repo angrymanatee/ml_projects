@@ -56,6 +56,9 @@ remote = [
     "lightgbm>=4.6.0",
 ]
 # torch / torchvision / torchaudio intentionally excluded — provided by RunPod pod image
+rl_godot = [
+    "godot-rl==0.8.2",
+]
 
 [tool.ruff]
 line-length = 88

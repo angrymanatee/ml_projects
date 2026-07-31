@@ -76,6 +76,7 @@ uv run pre-commit run --all-files
 | Directory | Topic | Reference |
 |-----------|-------|-----------|
 | `time_series/` | Kaggle Store Sales forecasting — Transformer-based RMSLE minimization | [`docs/store_sales_project.md`](docs/store_sales_project.md) |
+| `rl_godot/` | Godot RL Agents interface check against `maze_bots` | [`docs/rl_godot_project.md`](docs/rl_godot_project.md) |
 | `intro/` | Introductory ML exercises | — |
 
 ## Stack
