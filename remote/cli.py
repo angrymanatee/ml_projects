@@ -9,6 +9,7 @@ from remote.config import RunPodConfig, load_config
 from remote.environment import (
     mlflow_proxy_url,
     setup_environment,
+    setup_godot_environment,
     start_mlflow,
     stop_mlflow,
 )
@@ -23,7 +24,7 @@ from remote.pod import (
     wait_for_running,
 )
 from remote.ssh import open_tunnel, run_remote, wait_for_ssh
-from remote.sync import pull_results, push_code, push_data
+from remote.sync import pull_results, push_code, push_data, push_godot_build
 
 app = typer.Typer(
     name="remote", help="Remote GPU training on RunPod", no_args_is_help=True
@@ -32,10 +33,14 @@ pod_app = typer.Typer(help="Pod lifecycle", no_args_is_help=True)
 sync_app = typer.Typer(help="Code and data sync", no_args_is_help=True)
 env_app = typer.Typer(help="Remote environment", no_args_is_help=True)
 sweep_app = typer.Typer(help="Parallel sweeps", no_args_is_help=True)
+godot_app = typer.Typer(
+    help="Godot RL interface check on a CPU pod", no_args_is_help=True
+)
 app.add_typer(pod_app, name="pod")
 app.add_typer(sync_app, name="sync")
 app.add_typer(env_app, name="env")
 app.add_typer(sweep_app, name="sweep")
+app.add_typer(godot_app, name="godot")
 
 _CONFIG_OPTION = typer.Option(
     Path("runpod_config.yaml"), "--config", help="Path to config YAML"
@@ -44,6 +49,7 @@ _TRAIN_COMMAND_ARG = typer.Argument(
     ..., help="Command to run on the remote pod (leading 'uv run' is stripped)"
 )
 _SWEEP_COMMAND_ARG = typer.Argument(...)
+_MAZE_BOTS_PATH_OPTION = typer.Option(None, "--maze-bots-path")
 
 
 def _normalize_train_command(command: list[str]) -> list[str]:
@@ -397,3 +403,98 @@ def sweep_teardown(mlflow_pod_id: str, config_path: Path = _CONFIG_OPTION) -> No
     config = load_config(config_path)
     terminate_pod(config, mlflow_pod_id)
     typer.echo(f"MLflow pod {mlflow_pod_id} terminated.")
+
+
+# ── Godot commands ────────────────────────────────────────────────────────────
+
+
+def _godot_check_command(config: RunPodConfig, n_steps: int) -> str:
+    return (
+        f"cd {config.remote_project_dir} && "
+        f"python -m rl_godot.constant_action_check "
+        f"--env-path {config.remote_godot_build_dir}/MazeBots --n-steps {n_steps}"
+    )
+
+
+@godot_app.command("push")
+def godot_push(
+    pod_id: str,
+    maze_bots_path: Path | None = _MAZE_BOTS_PATH_OPTION,
+    config_path: Path = _CONFIG_OPTION,
+) -> None:
+    """Push rl_godot/ source and the exported Linux binary to the pod."""
+    config = load_config(config_path)
+    target = get_ssh_target(config, pod_id)
+    push_code(target, config)
+    push_godot_build(target, config, maze_bots_path or Path(config.maze_bots_repo_path))
+    typer.echo("Godot code and binary pushed.")
+
+
+@godot_app.command("setup")
+def godot_setup(pod_id: str, config_path: Path = _CONFIG_OPTION) -> None:
+    """Install godot-rl on the pod."""
+    config = load_config(config_path)
+    target = get_ssh_target(config, pod_id)
+    setup_godot_environment(target, config)
+    typer.echo("Godot environment ready.")
+
+
+@godot_app.command("check")
+def godot_check(
+    pod_id: str,
+    n_steps: int = typer.Option(20, "--n-steps"),
+    config_path: Path = _CONFIG_OPTION,
+) -> None:
+    """Run the constant-action interface check on the pod."""
+    config = load_config(config_path)
+    target = get_ssh_target(config, pod_id)
+    run_remote(target, _godot_check_command(config, n_steps))
+    typer.echo("Check complete.")
+
+
+@godot_app.command("run")
+def godot_run(
+    maze_bots_path: Path | None = _MAZE_BOTS_PATH_OPTION,
+    n_steps: int = typer.Option(20, "--n-steps"),
+    on_complete: str | None = typer.Option(None, "--on-complete"),
+    config_path: Path = _CONFIG_OPTION,
+) -> None:
+    """Full pipeline: provision CPU pod -> push -> setup -> check -> terminate."""
+    config = load_config(config_path)
+    if on_complete:
+        config.on_complete = on_complete
+    config.docker_image = config.godot_docker_image
+    resolved_maze_bots_path = maze_bots_path or Path(config.maze_bots_repo_path)
+
+    pod_id: str | None = None
+    try:
+        typer.echo("Creating pod...")
+        pod_id = create_pod(config, name_suffix="godot", gpu_count=0)
+        typer.echo(f"Pod created: {pod_id}")
+
+        typer.echo("Waiting for pod to start...")
+        target = wait_for_running(config, pod_id)
+        typer.echo("Waiting for SSH...")
+        wait_for_ssh(target)
+
+        typer.echo("Pushing code and binary...")
+        push_code(target, config)
+        push_godot_build(target, config, resolved_maze_bots_path)
+
+        typer.echo("Setting up environment...")
+        setup_godot_environment(target, config)
+
+        typer.echo("Running interface check...")
+        run_remote(target, _godot_check_command(config, n_steps))
+
+        _apply_on_complete(config, pod_id)
+        pod_id = None
+    except Exception as exc:
+        typer.echo(f"\nError: {exc}", err=True)
+        if pod_id:
+            typer.echo(
+                f"Pod {pod_id} left running — SSH in to debug or terminate manually:",
+                err=True,
+            )
+            typer.echo(f"  python -m remote pod terminate {pod_id}", err=True)
+        raise typer.Exit(1) from None
