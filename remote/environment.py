@@ -38,7 +38,7 @@ def setup_environment(target: SSHTarget, config: RunPodConfig) -> None:
     )
 
 
-_GODOT_REMOTE_DEPS = ["godot-rl==0.8.2"]
+_GODOT_REMOTE_DEPS = ["godot-rl==0.8.2", "typer>=0.12.0"]
 
 
 def setup_godot_environment(target: SSHTarget, config: RunPodConfig) -> None:
