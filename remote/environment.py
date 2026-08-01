@@ -38,6 +38,21 @@ def setup_environment(target: SSHTarget, config: RunPodConfig) -> None:
     )
 
 
+_GODOT_REMOTE_DEPS = ["godot-rl==0.8.2"]
+
+
+def setup_godot_environment(target: SSHTarget, config: RunPodConfig) -> None:
+    """Bootstrap the remote pod for the Godot RL interface check.
+
+    Installs godot-rl (pulls a CPU-only stable-baselines3/torch automatically —
+    no CUDA involved, unlike setup_environment()).
+    """
+    deps = " ".join(f'"{d}"' for d in _GODOT_REMOTE_DEPS)
+    run_remote(target, f"python -m pip install --quiet --ignore-installed {deps}")
+    run_remote(target, f"mkdir -p {config.remote_project_dir}")
+    run_remote(target, "python -c \"import godot_rl; print('godot_rl OK')\"")
+
+
 def start_mlflow(target: SSHTarget, config: RunPodConfig) -> None:
     """Start an MLflow tracking server on the pod and wait until it's ready.
 
