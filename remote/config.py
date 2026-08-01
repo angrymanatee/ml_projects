@@ -22,10 +22,13 @@ class RunPodConfig:
     cloud_type: str = "SECURE"  # SECURE | COMMUNITY (community is cheaper)
     docker_image: str = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
     mlflow_cpu_image: str = "runpod/base:0.6.2-cpu"
+    godot_docker_image: str = "runpod/base:0.6.2-cpu"
     pod_name_prefix: str = "mlprojects"
     remote_project_dir: str = "/workspace/mlprojects"
     remote_data_dir: str = "/workspace/mlprojects/data"
     remote_mlruns_dir: str = "/workspace/mlruns"
+    remote_godot_build_dir: str = "/workspace/maze_bots_build"
+    maze_bots_repo_path: str = "/Users/sauron/GodotProjects/maze_bots"
     local_mlruns_dir: str = "mlruns"
     default_datasets: list[str] = field(default_factory=list)
     on_complete: str = "terminate"  # terminate | stop | keep
