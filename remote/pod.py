@@ -39,14 +39,19 @@ def _extract_ssh_target(pod: dict, config: RunPodConfig) -> SSHTarget:
     )
 
 
-def create_pod(config: RunPodConfig, *, name_suffix: str = "") -> str:
-    """Create a RunPod GPU pod and return its pod ID.
+def create_pod(
+    config: RunPodConfig, *, name_suffix: str = "", gpu_count: int | None = None
+) -> str:
+    """Create a RunPod pod and return its pod ID.
 
     Exposes port 22 (TCP) for SSH access. Does not wait for RUNNING state.
 
     Args:
         config: RunPod configuration.
         name_suffix: Appended to pod_name_prefix (with a hyphen) to form the pod name.
+        gpu_count: Overrides config.gpu_count when given — pass 0 for a CPU-only pod.
+            RunPod's SDK still requires a gpu_type_id even for CPU-only workloads
+            (same caveat as create_mlflow_pod).
 
     Returns:
         RunPod pod ID string.
@@ -62,7 +67,7 @@ def create_pod(config: RunPodConfig, *, name_suffix: str = "") -> str:
         image_name=config.docker_image,
         gpu_type_id=config.gpu_type,
         cloud_type=config.cloud_type,
-        gpu_count=config.gpu_count,
+        gpu_count=gpu_count if gpu_count is not None else config.gpu_count,
         container_disk_in_gb=50,
         ports="22/tcp",
         support_public_ip=True,
