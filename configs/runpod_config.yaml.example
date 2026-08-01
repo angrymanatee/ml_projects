@@ -9,14 +9,24 @@ gpu_count: 1
 cloud_type: "SECURE"          # SECURE (reliable) or COMMUNITY (cheaper)
 docker_image: "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 mlflow_cpu_image: "runpod/base:0.6.2-cpu"
+godot_docker_image: "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+godot_cpu_instance_id: "cpu3c-2-4"   # compute-optimized, 2 vCPU / 4GB RAM
 
 pod_name_prefix: "mlprojects"
 remote_project_dir: "/workspace/mlprojects"
 remote_data_dir: "/workspace/data"
 remote_mlruns_dir: "/workspace/mlruns"
+remote_godot_build_dir: "/workspace/maze_bots_build"
+maze_bots_repo_path: "/Users/sauron/GodotProjects/maze_bots"
 local_mlruns_dir: "mlruns"
 
 default_datasets: []          # e.g. ["store-sales-time-series-forecasting"]
 
 on_complete: "terminate"      # terminate | stop | keep
 mlflow_port: 5000
+
+# Required — RunPod pods are reached by raw IP, which ~/.ssh/config Host
+# patterns (e.g. "Host *.runpod.io") don't match, and the default SSH agent
+# has no identities loaded. Must be an UNENCRYPTED key (this pipeline runs
+# non-interactively — an encrypted key just hangs/fails with no clear error).
+ssh_key_path: "/Users/sauron/.ssh/runpod.ed25519"
