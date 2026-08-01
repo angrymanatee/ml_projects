@@ -70,7 +70,7 @@ harmless; the handshake only warns on mismatch, it doesn't fail the connection.
 ## Running it on RunPod
 
 `remote/` (this repo's general RunPod CLI, otherwise used for `time_series` GPU training) has a
-`godot` subcommand group for a CPU-only pod flavor:
+`godot` subcommand group for a CPU-only pod flavor, verified working end to end:
 
 ```bash
 # Full pipeline: create CPU pod -> push code+binary -> install deps -> run the check -> terminate
@@ -86,9 +86,30 @@ Since `Sync.gd` hardcodes `127.0.0.1` (loopback-only, not exposed over the netwo
 process and the Godot binary must run on the *same* machine — there's no "train locally against a
 remote game server" mode. `godot run` pushes both `rl_godot/` (Python) and the exported Linux
 binary (`maze_bots/build/linux/`, built via that repo's `scripts/export.sh`) to the same pod and
-runs the check there. Uses `godot_docker_image` (default `runpod/base:0.6.2-cpu`, same cheap image
-as the sweep-mode MLflow pod) — no CUDA involved; `godot-rl` pulls a CPU-only `stable-baselines3`/
-`torch` automatically via pip.
+runs the check there.
+
+**Setup prerequisites beyond `time_series`'s existing RunPod setup** (`docs/store_sales_project.md`),
+discovered getting this working — worth knowing since they affect any `remote` command, not just
+`godot`:
+
+- `runpod_config.yaml` **must** set `ssh_key_path` to an **unencrypted** private key. RunPod pods
+  are reached by raw IP, which `~/.ssh/config` `Host` patterns (e.g. `Host *.runpod.io`) don't
+  match, and the default SSH agent has no identities loaded — so without `ssh_key_path`, `-i` is
+  never passed at all. An encrypted key just fails non-interactively with no clear error (this
+  pipeline never prompts). See `configs/runpod_config.yaml.example`.
+- Real CPU pods use a completely different RunPod API path than "a GPU pod with `gpu_count=0`" —
+  the latter doesn't work at all (confirmed empirically: rejected as "no instances available"
+  across every GPU type and cloud tier). The pip `runpod` SDK only creates a genuine CPU pod when
+  `gpu_type_id=None`, optionally with `instance_id` for a specific flavor (e.g. `"cpu3c-2-4"` —
+  see `runpod.list_cpu_types()`/`mcp__runpod__list-cpu-types`). CPU pods also cap
+  `container_disk_in_gb` at 20 (GPU pods allow 50) — a hard platform limit, not configurable.
+- `godot_docker_image` is the same PyTorch image as the main GPU flow
+  (`runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`), not a lighter CPU-specific image —
+  `runpod/base:0.6.2-cpu` was tried first (matching the sweep-mode MLflow pod's image) but its
+  container never actually writes the injected SSH key into `authorized_keys` when deployed as a
+  bare pod outside RunPod's "Projects" feature; only images RunPod calls "official templates"
+  (PyTorch, Stable Diffusion, etc.) have that wired up. No CUDA is actually used — `godot-rl`
+  pulls a CPU-only `stable-baselines3`/`torch` via pip regardless of the image's CUDA libraries.
 
 ## Dependencies
 
