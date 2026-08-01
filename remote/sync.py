@@ -8,7 +8,7 @@ from pathlib import Path
 from remote.config import RunPodConfig
 from remote.ssh import SSHTarget, run_remote
 
-_SOURCE_DIRS = ["time_series", "common"]
+_SOURCE_DIRS = ["time_series", "common", "rl_godot"]
 _SOURCE_FILES = ["pyproject.toml"]
 _RSYNC_BASE_OPTS = ["-avz", "--delete"]
 _CODE_EXCLUDE_OPTS = ["--exclude=__pycache__/", "--exclude=*.pyc", "--exclude=.venv/"]
@@ -79,6 +79,35 @@ def push_data(target: SSHTarget, config: RunPodConfig, dataset: str) -> None:
     _run_rsync(
         f"data/{dataset}/", f"{target.user}@{target.host}:{remote_dataset_dir}/", target
     )
+
+
+def push_godot_build(
+    target: SSHTarget, config: RunPodConfig, maze_bots_path: Path
+) -> None:
+    """Rsync the exported Linux Godot binary to the remote pod.
+
+    Args:
+        target: SSH connection info.
+        config: RunPod configuration.
+        maze_bots_path: Local path to the maze_bots checkout.
+
+    Raises:
+        FileNotFoundError: If <maze_bots_path>/build/linux does not exist locally
+            (run maze_bots's scripts/export.sh first).
+    """
+    local_build_dir = maze_bots_path / "build" / "linux"
+    if not local_build_dir.exists():
+        raise FileNotFoundError(
+            f"Linux export not found: {local_build_dir}\n"
+            "Run scripts/export.sh in the maze_bots repo first."
+        )
+    run_remote(target, f"mkdir -p {config.remote_godot_build_dir}")
+    _run_rsync(
+        f"{local_build_dir}/",
+        f"{target.user}@{target.host}:{config.remote_godot_build_dir}/",
+        target,
+    )
+    run_remote(target, f"chmod +x {config.remote_godot_build_dir}/MazeBots.x86_64")
 
 
 def pull_results(target: SSHTarget, config: RunPodConfig) -> None:
