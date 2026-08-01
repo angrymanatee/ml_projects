@@ -15,7 +15,12 @@ _CODE_EXCLUDE_OPTS = ["--exclude=__pycache__/", "--exclude=*.pyc", "--exclude=.v
 
 
 def _ssh_opt(target: SSHTarget) -> str:
-    return f"ssh -p {target.port} -o StrictHostKeyChecking=no -o ConnectTimeout=30"
+    # Reuses SSHTarget.ssh_opts rather than building options separately, so
+    # rsync picks up identity_file the same way run_remote()/wait_for_ssh() do —
+    # this previously omitted -i entirely, silently breaking every sync
+    # operation whenever ssh_key_path is set (which raw-IP RunPod connections
+    # require; see configs/runpod_config.yaml.example).
+    return "ssh " + " ".join(target.ssh_opts)
 
 
 def _run_rsync(
