@@ -36,9 +36,15 @@ actual policy) exists yet — the constant-action check is the whole surface. Th
 
 ## `rl_godot/constant_action_check.py`
 
-Steps a Godot instance with a hardcoded constant action (`direction=[0.0, -1.0]`, which drives the
-player straight toward the goal on `GoStraight.tscn`), printing obs/reward/done each step. Manual
-smoke-test script, not covered by `pytest` — needs a live Godot process on the other end.
+Steps a Godot instance with a constant action (default `direction=[0.0, -1.0]`, which drives the
+player straight toward the goal on `GoStraight.tscn`; override with `--action-x`/`--action-y`),
+printing obs/reward/done each step. Manual smoke-test script, not covered by `pytest` — needs a
+live Godot process on the other end.
+
+`--gui` opens a live tkinter debug window alongside the terminal printout, showing the current
+action and observation and letting you edit the action while the loop runs — Entry fields, arrow
+keys (nudge by `--action-step`), or spacebar (zero it). In `--gui` mode the loop runs until the
+window is closed rather than for `--n-steps`.
 
 ### Running it locally
 
