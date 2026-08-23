@@ -469,7 +469,9 @@ def godot_run(
     pod_id: str | None = None
     try:
         typer.echo("Creating pod...")
-        pod_id = create_pod(config, name_suffix="godot", gpu_count=0)
+        pod_id = create_pod(
+            config, name_suffix="godot", cpu_instance_id=config.godot_cpu_instance_id
+        )
         typer.echo(f"Pod created: {pod_id}")
 
         typer.echo("Waiting for pod to start...")

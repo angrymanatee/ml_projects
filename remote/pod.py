@@ -40,7 +40,11 @@ def _extract_ssh_target(pod: dict, config: RunPodConfig) -> SSHTarget:
 
 
 def create_pod(
-    config: RunPodConfig, *, name_suffix: str = "", gpu_count: int | None = None
+    config: RunPodConfig,
+    *,
+    name_suffix: str = "",
+    gpu_count: int | None = None,
+    cpu_instance_id: str | None = None,
 ) -> str:
     """Create a RunPod pod and return its pod ID.
 
@@ -49,9 +53,15 @@ def create_pod(
     Args:
         config: RunPod configuration.
         name_suffix: Appended to pod_name_prefix (with a hyphen) to form the pod name.
-        gpu_count: Overrides config.gpu_count when given — pass 0 for a CPU-only pod.
-            RunPod's SDK still requires a gpu_type_id even for CPU-only workloads
-            (same caveat as create_mlflow_pod).
+        gpu_count: Overrides config.gpu_count for a GPU pod. Ignored if cpu_instance_id
+            is given.
+        cpu_instance_id: If given, creates a genuine CPU-only pod on this instance
+            flavor (e.g. "cpu3c-2-4" — see runpod's list-cpu-types) instead of a GPU
+            pod. The pip runpod SDK's create_pod() only creates a CPU pod when
+            gpu_type_id=None; passing a real GPU type with gpu_count=0 does not work
+            (confirmed empirically — RunPod's API rejects it as "no instances
+            available" regardless of GPU type or cloud tier). CPU pods also cap
+            container disk at 20GB (vs. 50GB for GPU pods) — a hard platform limit.
 
     Returns:
         RunPod pod ID string.
@@ -62,16 +72,28 @@ def create_pod(
         if name_suffix
         else config.pod_name_prefix
     )
-    pod = runpod_sdk.create_pod(
-        name=name,
-        image_name=config.docker_image,
-        gpu_type_id=config.gpu_type,
-        cloud_type=config.cloud_type,
-        gpu_count=gpu_count if gpu_count is not None else config.gpu_count,
-        container_disk_in_gb=50,
-        ports="22/tcp",
-        support_public_ip=True,
-    )
+    if cpu_instance_id is not None:
+        pod = runpod_sdk.create_pod(
+            name=name,
+            image_name=config.docker_image,
+            gpu_type_id=None,
+            instance_id=cpu_instance_id,
+            cloud_type=config.cloud_type,
+            container_disk_in_gb=20,
+            ports="22/tcp",
+            support_public_ip=True,
+        )
+    else:
+        pod = runpod_sdk.create_pod(
+            name=name,
+            image_name=config.docker_image,
+            gpu_type_id=config.gpu_type,
+            cloud_type=config.cloud_type,
+            gpu_count=gpu_count if gpu_count is not None else config.gpu_count,
+            container_disk_in_gb=50,
+            ports="22/tcp",
+            support_public_ip=True,
+        )
     return pod["id"]
 
 

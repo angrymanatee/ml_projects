@@ -22,7 +22,11 @@ class RunPodConfig:
     cloud_type: str = "SECURE"  # SECURE | COMMUNITY (community is cheaper)
     docker_image: str = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
     mlflow_cpu_image: str = "runpod/base:0.6.2-cpu"
-    godot_docker_image: str = "runpod/base:0.6.2-cpu"
+    # runpod/base:0.6.2-cpu doesn't have RunPod's SSH key setup wired up (not an
+    # "official template" per their docs) — reuse the proven-working PyTorch image
+    # instead, just on a CPU-only instance.
+    godot_docker_image: str = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+    godot_cpu_instance_id: str = "cpu3c-2-4"  # compute-optimized, 2 vCPU / 4GB RAM
     pod_name_prefix: str = "mlprojects"
     remote_project_dir: str = "/workspace/mlprojects"
     remote_data_dir: str = "/workspace/mlprojects/data"
