@@ -17,4 +17,5 @@ them. The rootdir conftest is the earliest hook that runs for every session.
 # isort: off
 import common.openmp_guard  # noqa: F401  (sets OMP env before torch/lightgbm load)
 import lightgbm  # noqa: F401
+
 # isort: on

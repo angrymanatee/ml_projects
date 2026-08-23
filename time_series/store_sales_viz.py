@@ -12,7 +12,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-import mlflow
 import numpy as np
 import pandas as pd
 import plotly.colors
@@ -21,6 +20,8 @@ import torch
 from plotly.subplots import make_subplots
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
+
+import mlflow
 
 _COLOR_CYCLE = plotly.colors.qualitative.Plotly
 

@@ -1,10 +1,40 @@
 """Shared fixtures for time_series tests."""
 
+import os
 from pathlib import Path
 
+import mlflow.tracking.fluent as mlflow_fluent
 import numpy as np
 import pandas as pd
 import pytest
+
+import mlflow
+
+
+@pytest.fixture(autouse=True)
+def _isolate_mlflow_state():
+    """Reset mlflow's process-global tracking state between tests.
+
+    `mlflow.set_experiment()` mutates module-global state (`fluent._active_experiment_id`)
+    and the `MLFLOW_EXPERIMENT_ID` env var, both of which outlive the `tracking_uri` that
+    produced them. A test that only calls `set_tracking_uri()` (relying on the default
+    experiment of its own fresh store) then inherits a stale experiment id left behind by
+    an earlier test's store, and `start_run()` fails to resolve it there.
+    """
+    original_tracking_uri = mlflow.get_tracking_uri()
+    original_active_experiment_id = mlflow_fluent._active_experiment_id
+    original_experiment_id_env = os.environ.get("MLFLOW_EXPERIMENT_ID")
+
+    yield
+
+    mlflow.end_run()
+    mlflow.set_tracking_uri(original_tracking_uri)
+    mlflow_fluent._active_experiment_id = original_active_experiment_id
+    if original_experiment_id_env is None:
+        os.environ.pop("MLFLOW_EXPERIMENT_ID", None)
+    else:
+        os.environ["MLFLOW_EXPERIMENT_ID"] = original_experiment_id_env
+
 
 _DATES = pd.to_datetime(["2013-01-01", "2013-01-02", "2013-01-03"])
 _STORE_NBRS = [1, 2]

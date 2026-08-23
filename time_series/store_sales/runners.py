@@ -3,7 +3,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import mlflow
 import torch
 from torch import Tensor, nn
 from torch.optim import AdamW
@@ -11,6 +10,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
+import mlflow
 from common.modules import MSLELoss
 
 from .data import StoreData

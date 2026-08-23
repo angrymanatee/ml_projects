@@ -11,6 +11,7 @@ from __future__ import annotations
 # first and isort must not reorder it. See common/openmp_guard.py.
 # isort: off
 import common.openmp_guard  # noqa: F401
+
 # isort: on
 
 import argparse  # noqa: E402

@@ -11,11 +11,11 @@ Run with:
 
 import argparse
 
-import mlflow
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 
+import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from common.modules import MSLELoss
