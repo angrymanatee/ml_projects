@@ -34,6 +34,20 @@ actual policy) exists yet — the constant-action check is the whole surface. Th
 - This repo's `rl_godot/` is the Python side of that TCP connection, plus (via `remote/`) the
   RunPod deployment that runs both halves on a pod.
 
+## `rl_godot/export_env.py`
+
+Thin wrapper around `maze_bots/scripts/export.sh` so you don't have to switch checkouts to
+produce a fresh binary:
+
+```bash
+uv run python -m rl_godot.export_env
+```
+
+Defaults `--maze-bots-path` to `/Users/sauron/GodotProjects/maze_bots`; override it if your
+checkout lives elsewhere. Prints the exported macOS/Linux binary paths and the exact
+`constant_action_check --env-path ...` command to run next. Same manual-tool status as
+`constant_action_check.py` below — needs a real `godot-mono` on `PATH`, not covered by `pytest`.
+
 ## `rl_godot/constant_action_check.py`
 
 Steps a Godot instance with a constant action (default `direction=[0.0, -1.0]`, which drives the
@@ -53,7 +67,7 @@ window is closed rather than for `--n-steps`.
 uv run python -m rl_godot.constant_action_check \
   --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots
 ```
-Requires the export to exist first: `./scripts/export.sh` in the `maze_bots` repo.
+Requires the export to exist first: `uv run python -m rl_godot.export_env` (see above).
 
 **Without `--env-path`** (two terminals, connects to an already-running instance):
 ```bash
