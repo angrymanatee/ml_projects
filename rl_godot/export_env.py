@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import subprocess
+from enum import StrEnum, auto
 from pathlib import Path
 
 import typer
 
 app = typer.Typer(add_completion=False)
+
+
+class ExportType(StrEnum):
+    DEBUG = auto()
+    RELEASE = auto()
+
 
 _MAZE_BOTS_PATH_OPTION = typer.Option(
     Path("/Users/sauron/GodotProjects/maze_bots"),
@@ -17,6 +24,7 @@ _MAZE_BOTS_PATH_OPTION = typer.Option(
 @app.command()
 def main(
     maze_bots_path: Path = _MAZE_BOTS_PATH_OPTION,
+    export_type: ExportType = ExportType.DEBUG,
 ) -> None:
     """Export the maze_bots Godot world to headless-runnable macOS/Linux binaries.
 
@@ -32,7 +40,9 @@ def main(
         )
 
     try:
-        subprocess.run([str(export_script)], check=True, cwd=maze_bots_path)
+        subprocess.run(
+            [str(export_script), export_type], check=True, cwd=maze_bots_path
+        )
     except subprocess.CalledProcessError as exc:
         raise typer.Exit(code=exc.returncode) from exc
 
