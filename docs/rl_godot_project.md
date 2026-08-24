@@ -23,10 +23,14 @@ actual policy) exists yet — the constant-action check is the whole surface. Th
   `maps/GoStraight.tscn` has this on by default — it's also the normal manual-play map now, with
   its controller swapped to `RLController`.
 - That `Sync` node drives an `RLController`/`rl_agent.gd` bridge: observations are a **dict**
-  keyed by observation kind (`"goal"`, `"player"`), each a 6-float `[X, Y, Z, orientationX,
-  orientationY, orientationZ]` vector; actions are a single 2-float continuous `"direction"` key;
-  reward and an episode-`done` signal both flow through the same bridge (`done` fires when
-  `GoalReachGame` ends a round — reaching the goal, dying, or timing out).
+  keyed by lowercased `ObservationKind` — `"goalbearing"` (3-float body-frame `[cos, sin,
+  log(1+range)]` to the goal) and `"rays"` (a 16-ray body-frame ray fan, 3 floats/ray — one
+  per class layer: world/enemy/trap — so 48 floats total, each in `[0, 1]`; enemy/trap
+  channels currently read zero, reserved for when those layers are populated). Actions are
+  **body-frame**: a 2-float continuous `"movement"` key (`[forward, strafe]`) plus a 1-float
+  continuous `"rotation"` key. Reward and an episode-`done` signal both flow through the same
+  bridge (`done` fires when `GoalReachGame` ends a round — reaching the goal, dying, or timing
+  out).
 - `maze_bots/scripts/export.sh` produces headless-runnable macOS/Linux exports at
   `maze_bots/build/{macos,linux}/` — gitignored build artifacts, not committed. Either the Python
   side connects to a manually-launched `godot-mono` process, or (preferred) launches an exported
@@ -50,10 +54,11 @@ checkout lives elsewhere. Prints the exported macOS/Linux binary paths and the e
 
 ## `rl_godot/constant_action_check.py`
 
-Steps a Godot instance with a constant action (default `direction=[0.0, -1.0]`, which drives the
-player straight toward the goal on `GoStraight.tscn`; override with `--action-x`/`--action-y`),
-printing obs/reward/done each step. Manual smoke-test script, not covered by `pytest` — needs a
-live Godot process on the other end.
+Steps a Godot instance with a constant action (default `movement=[1.0, 0.0]` — body-frame
+forward — plus `rotation=0.0`, which drives the player straight toward the goal on
+`GoStraight.tscn`; override with `--action-x`/`--action-y`/`--action-rotation`), printing
+obs/reward/done each step. Manual smoke-test script, not covered by `pytest` — needs a live
+Godot process on the other end.
 
 `--gui` opens a live tkinter debug window alongside the terminal printout, showing the current
 action and observation and letting you edit the action while the loop runs — Entry fields, arrow
