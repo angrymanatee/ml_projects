@@ -112,7 +112,9 @@ run under a single parent study run.
 
 ## Experiment Tracking
 
-MLflow local server. `TRACKING_URI` in `common/model_registry.py`. Each run logs:
+MLflow local server. `TRACKING_URI` in `common/model_registry.py`. Backend store and
+artifacts live at `/Volumes/Wokyis/ML/mlflow` (external drive), not in the repo —
+see `scripts/start_mlflow.sh` (override with the `MLFLOW_DIR` env var). Each run logs:
 - params: epochs, lr, batch_size, architecture hyperparams, feature flags
 - tags: git branch + SHA, device, architecture name
 - metrics: `train_loss`, `val_loss` (MSLE; take sqrt for RMSLE)

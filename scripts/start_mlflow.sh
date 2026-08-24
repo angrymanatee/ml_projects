@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(dirname "$(dirname "${BASH_SOURCE[0]}")")"
-MLFLOW_DIR="${REPO_ROOT}/mlflow"
+MLFLOW_DIR="${MLFLOW_DIR:-/Volumes/Wokyis/ML/mlflow}"
 HOST="${1:-localhost}"
 PORT="${2:-5000}"
 
