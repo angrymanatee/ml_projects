@@ -24,15 +24,16 @@ def _format_obs_lines(obs: dict[str, np.ndarray], values_per_row: int = 8) -> st
 
     Long vectors (e.g. a 48-element ray fan) are wrapped across multiple rows,
     `values_per_row` values each, so a single key never produces a giant line.
+    `rays` is special-cased to 3 values per row: `RayFanSensor` packs one
+    float per class layer (world/enemy/trap) per ray, so 3-per-row puts one
+    ray on each line regardless of `values_per_row`.
     """
     lines = []
     for key, value in obs.items():
         vec = np.asarray(value).reshape(-1)
         formatted = [f"{v:.3f}" for v in vec]
-        rows = [
-            formatted[i : i + values_per_row]
-            for i in range(0, len(formatted), values_per_row)
-        ]
+        row_size = 3 if key == "rays" else values_per_row
+        rows = [formatted[i : i + row_size] for i in range(0, len(formatted), row_size)]
         indent = " " * (len(key) + 2)
         for row_idx, row in enumerate(rows):
             prefix = f"{key}: [" if row_idx == 0 else f"{indent} "
