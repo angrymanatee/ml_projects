@@ -15,13 +15,41 @@ from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
 from stable_baselines3.common.utils import get_schedule_fn
-from stable_baselines3.common.vec_env import VecMonitor
+from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecMonitor
+from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
 import mlflow
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 
 app = typer.Typer(add_completion=False)
+
+
+class Float32ObsVecEnvWrapper(VecEnvWrapper):
+    """Casts Dict-obs entries to float32.
+
+    `StableBaselinesGodotEnv` builds obs arrays with plain `np.array(v)` on
+    JSON-decoded Python floats, so they come back float64 regardless of the
+    declared (float32) observation_space dtype. PyTorch's MPS backend rejects
+    float64 tensors outright (`obs_as_tensor` does a bare `th.as_tensor`, no
+    dtype cast), so training on `--device mps` crashes on the first rollout
+    step without this.
+    """
+
+    def __init__(self, venv: VecEnv) -> None:
+        super().__init__(venv)
+
+    def reset(self) -> VecEnvObs:
+        return self._cast(self.venv.reset())
+
+    def step_wait(self) -> VecEnvStepReturn:
+        obs, rewards, dones, infos = self.venv.step_wait()
+        return self._cast(obs), rewards, dones, infos
+
+    @staticmethod
+    def _cast(obs: VecEnvObs) -> VecEnvObs:
+        assert isinstance(obs, dict)
+        return {key: value.astype(np.float32) for key, value in obs.items()}
 
 
 class MLflowWriter(KVWriter):
@@ -74,6 +102,18 @@ def main(
     ),
     experiment: str = typer.Option("GodotMazeBots_PPO", "--experiment"),
     run_name: str | None = typer.Option(None, "--run-name"),
+    device: str = typer.Option(
+        "auto",
+        "--device",
+        help="Torch device for the policy net ('auto', 'cpu', 'cuda', 'mps', ...). "
+        "'auto' only checks for CUDA, so it won't pick up MPS on Apple Silicon — "
+        "pass --device mps explicitly to use it.",
+    ),
+    learning_rate: float = typer.Option(
+        3e-4,
+        "--learning-rate",
+        help="PPO Adam learning rate (SB3 default: 3e-4).",
+    ),
 ) -> None:
     """Train PPO on a maze_bots Godot instance, then roll out the learned policy.
 
@@ -88,10 +128,19 @@ def main(
     # VecMonitor is what populates SB3's ep_info_buffer; without it the `rollout/`
     # block (ep_rew_mean) never prints, since SB3 only auto-wraps non-VecEnvs.
     env = VecMonitor(
-        StableBaselinesGodotEnv(env_path=env_path, port=port, n_parallel=n_parallel)
+        Float32ObsVecEnvWrapper(
+            StableBaselinesGodotEnv(env_path=env_path, port=port, n_parallel=n_parallel)
+        )
     )
     # MultiInputPolicy, not MlpPolicy: godot_rl always exposes a Dict observation space.
-    model = PPO("MultiInputPolicy", env, n_steps=n_steps, verbose=1)
+    model = PPO(
+        "MultiInputPolicy",
+        env,
+        n_steps=n_steps,
+        device=device,
+        learning_rate=learning_rate,
+        verbose=1,
+    )
 
     mlflow.set_tracking_uri(TRACKING_URI)
     mlflow.set_experiment(experiment)
@@ -111,6 +160,9 @@ def main(
                 "num_envs": env.num_envs,
                 "env_path": env_path or "editor",
                 "policy": "MultiInputPolicy",
+                # Resolved device, not the raw CLI value — 'auto' logs as whatever
+                # get_device() actually picked (e.g. 'cpu' when 'auto' misses MPS).
+                "device": str(model.device),
                 "n_steps": model.n_steps,
                 "batch_size": model.batch_size,
                 "n_epochs": model.n_epochs,
@@ -137,6 +189,7 @@ def main(
         obs = env.reset()
         print(f"reset obs: {obs}")
         episode_returns: list[float] = []
+        step_rewards: list[float] = []
         for step in range(eval_steps):
             # VecEnvObs includes a tuple arm that godot_rl never returns —
             # its observation space is always a Dict.
@@ -144,6 +197,7 @@ def main(
                 cast(dict[str, np.ndarray], obs), deterministic=True
             )
             obs, rewards, dones, infos = env.step(actions)
+            step_rewards.extend(float(r) for r in np.asarray(rewards).reshape(-1))
             # VecMonitor stamps info["episode"] on the step an env terminates, so
             # returns stay correct across the auto-reset a VecEnv hides.
             episode_returns.extend(
@@ -151,20 +205,23 @@ def main(
             )
             print(f"step {step}: reward={rewards} done={dones}")
 
+        # eval/mean_step_reward and eval/num_episodes always log, even when no
+        # episode completes in eval_steps (e.g. a short smoke run) — otherwise a
+        # run like that leaves MLflow with no eval signal at all.
+        eval_metrics = {
+            "eval/mean_step_reward": float(np.mean(step_rewards)),
+            "eval/num_episodes": len(episode_returns),
+        }
         if episode_returns:
             mean_episode_return = float(np.mean(episode_returns))
-            mlflow.log_metrics(
-                {
-                    "eval/mean_episode_return": mean_episode_return,
-                    "eval/num_episodes": len(episode_returns),
-                }
-            )
+            eval_metrics["eval/mean_episode_return"] = mean_episode_return
             print(
                 f"mean return over {len(episode_returns)} episodes: "
                 f"{mean_episode_return:.3f}"
             )
         else:
-            print(f"no episode completed within {eval_steps} steps; nothing logged")
+            print(f"no episode completed within {eval_steps} steps")
+        mlflow.log_metrics(eval_metrics)
 
     env.close()
 
