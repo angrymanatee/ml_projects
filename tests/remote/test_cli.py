@@ -4,10 +4,25 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from remote.cli import _normalize_train_command, app
+from remote.cli import _godot_check_command, _normalize_train_command, app
 from remote.config import RunPodConfig
 
 runner = CliRunner()
+
+
+# --- _godot_check_command unit tests ---
+
+
+def test_godot_check_command_without_rl_config() -> None:
+    command = _godot_check_command(RunPodConfig(api_key="test_key"), n_steps=20)
+    assert "--rl-config" not in command
+
+
+def test_godot_check_command_with_rl_config() -> None:
+    command = _godot_check_command(
+        RunPodConfig(api_key="test_key"), n_steps=20, rl_config="no_rays"
+    )
+    assert command.endswith("--rl-config no_rays")
 
 
 # --- _normalize_train_command unit tests ---

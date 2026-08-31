@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 from typing import Any, cast
 
+import mlflow
 import numpy as np
 import typer
 from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
@@ -18,7 +19,7 @@ from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecMonitor
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
-import mlflow
+import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for --rl-config
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 
@@ -100,6 +101,13 @@ def main(
         help="Number of parallel envs. Requires --env-path; binds ports "
         "[--port, --port + parallel - 1].",
     ),
+    rl_config: str | None = typer.Option(
+        None,
+        "--rl-config",
+        help="Config name under maze_bots/configs/, no .cfg extension (e.g. 'no_rays'), "
+        "passed to the launched Godot process as -- --rl-config=res://configs/"
+        "<name>.cfg. Requires --env-path — there's no process to pass it to otherwise.",
+    ),
     experiment: str = typer.Option("GodotMazeBots_PPO", "--experiment"),
     run_name: str | None = typer.Option(None, "--run-name"),
     device: str = typer.Option(
@@ -125,11 +133,16 @@ def main(
     platform suffix — godot_rl appends .app/.x86_64/.exe based on the host platform), no
     second terminal needed.
     """
+    if rl_config is not None and env_path is None:
+        raise typer.BadParameter("--rl-config requires --env-path")
+
     # VecMonitor is what populates SB3's ep_info_buffer; without it the `rollout/`
     # block (ep_rew_mean) never prints, since SB3 only auto-wraps non-VecEnvs.
     env = VecMonitor(
         Float32ObsVecEnvWrapper(
-            StableBaselinesGodotEnv(env_path=env_path, port=port, n_parallel=n_parallel)
+            StableBaselinesGodotEnv(
+                env_path=env_path, port=port, n_parallel=n_parallel, rl_config=rl_config
+            )
         )
     )
     # MultiInputPolicy, not MlpPolicy: godot_rl always exposes a Dict observation space.

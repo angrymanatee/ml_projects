@@ -180,6 +180,13 @@ def main(
         "--env-path",
         help="Path (no platform suffix) to an exported maze_bots binary",
     ),
+    rl_config: str | None = typer.Option(
+        None,
+        "--rl-config",
+        help="Config name under maze_bots/configs/, no .cfg extension (e.g. 'no_rays'), "
+        "passed to the launched Godot process as -- --rl-config=res://configs/"
+        "<name>.cfg. Requires --env-path — there's no process to pass it to otherwise.",
+    ),
     action_x: float = typer.Option(1.0, "--action-x", help="Initial direction.x"),
     action_y: float = typer.Option(0.0, "--action-y", help="Initial direction.y"),
     action_rotation: float = typer.Option(
@@ -210,7 +217,12 @@ def main(
     """
     from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
 
-    env = StableBaselinesGodotEnv(env_path=env_path, port=port)
+    import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for --rl-config
+
+    if rl_config is not None and env_path is None:
+        raise typer.BadParameter("--rl-config requires --env-path")
+
+    env = StableBaselinesGodotEnv(env_path=env_path, port=port, rl_config=rl_config)
     # One row per agent/env instance; rl_agent.gd's action space is a 2-float
     # continuous "movement" key plus a 1-float "rotation" key, and this scene
     # has one agent.

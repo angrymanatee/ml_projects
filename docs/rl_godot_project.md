@@ -92,6 +92,33 @@ You may see a one-time console warning about a `major`/`minor` version mismatch 
 addon pins wire-protocol `0.7`, the `godot-rl` pip package here is `0.8.2`) — expected and
 harmless; the handshake only warns on mismatch, it doesn't fail the connection.
 
+### Selecting an RL config
+
+`maze_bots/configs/rl_config.cfg` is the default; other configs (e.g. `no_rays.cfg`) can be
+selected with `--rl-config <name>` (no `.cfg` extension) on `constant_action_check` /
+`simple_ppo_train`, which requires `--env-path` (there's no running process to pass it to
+otherwise):
+
+```bash
+uv run python -m rl_godot.constant_action_check \
+  --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots \
+  --rl-config no_rays
+```
+
+This works around `godot_rl.core.godot_env.GodotEnv`'s own kwargs pass-through, which appends
+`--key=value` engine flags with no `--` separator — maze_bots' `RLConfig.cs` reads its override
+via `OS.GetCmdlineUserArgs()`, which only sees args placed after that separator. `rl_godot/
+env_launch.py` patches `StableBaselinesGodotEnv` to build `... -- --rl-config=res://configs/
+<name>.cfg` instead. Without `--env-path` (two-terminal mode), pass it directly to `godot-mono`
+yourself: `-- --rl-config=res://configs/no_rays.cfg` after your own flags.
+
+Also note: `.cfg` files under `maze_bots/configs/` must be listed in `export_presets.cfg`'s
+`include_filter` (e.g. `configs/*.cfg`) to actually end up in an export — Godot's
+`export_filter="all_resources"` only packs files tracked by `ResourceLoader`, and a `ConfigFile`
+loaded manually (as `RLConfig.cs` does) isn't one. Without that filter, `--rl-config` silently
+falls back to scene defaults (`RLConfig: could not load ... (FileNotFound)` in the Godot log) —
+this bit us once already.
+
 ## Running it on RunPod
 
 `remote/` (this repo's general RunPod CLI, otherwise used for `time_series` GPU training) has a
