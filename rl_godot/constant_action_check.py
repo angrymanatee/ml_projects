@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import typer
+
+from rl_godot.export_env import MAZE_BOTS_PATH_OPTION, ExportType, build_env
 
 if TYPE_CHECKING:
     from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
@@ -187,6 +190,16 @@ def main(
         "passed to the launched Godot process as -- --rl-config=res://configs/"
         "<name>.cfg. Requires --env-path — there's no process to pass it to otherwise.",
     ),
+    build: bool = typer.Option(
+        True,
+        "--build/--no-build",
+        help="Export a fresh maze_bots binary before launching (only when --env-path "
+        "is given). Pass --no-build when running externally against a binary that "
+        "was already built and pushed separately (e.g. on a RunPod pod, which has no "
+        "Godot editor to export with).",
+    ),
+    maze_bots_path: Path = MAZE_BOTS_PATH_OPTION,
+    export_type: ExportType = ExportType.DEBUG,
     action_x: float = typer.Option(1.0, "--action-x", help="Initial direction.x"),
     action_y: float = typer.Option(0.0, "--action-y", help="Initial direction.y"),
     action_rotation: float = typer.Option(
@@ -207,7 +220,9 @@ def main(
 
     With --env-path: launches and owns the Godot process itself (an exported binary, no
     platform suffix — godot_rl appends .app/.x86_64/.exe based on the host platform), no
-    second terminal needed.
+    second terminal needed. By default this also re-exports maze_bots from
+    --maze-bots-path first (--build/--no-build); pass --no-build to launch an
+    already-built binary as-is.
 
     --action-x/--action-y set the starting movement action (defaults reproduce the
     original hardcoded straight-to-goal action); --action-rotation sets the constant
@@ -221,6 +236,9 @@ def main(
 
     if rl_config is not None and env_path is None:
         raise typer.BadParameter("--rl-config requires --env-path")
+
+    if build and env_path is not None:
+        build_env(maze_bots_path, export_type)
 
     env = StableBaselinesGodotEnv(env_path=env_path, port=port, rl_config=rl_config)
     # One row per agent/env instance; rl_agent.gd's action space is a 2-float

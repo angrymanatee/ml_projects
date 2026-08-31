@@ -72,7 +72,14 @@ window is closed rather than for `--n-steps`.
 uv run python -m rl_godot.constant_action_check \
   --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots
 ```
-Requires the export to exist first: `uv run python -m rl_godot.export_env` (see above).
+`--build` (default) re-exports maze_bots from `--maze-bots-path` before launching, so
+there's no need to run `rl_godot.export_env` separately first — it's the same
+`build_env` helper, just invoked automatically. Pass `--no-build` to skip straight to
+launching the binary already at `--env-path` as-is — e.g. when running externally
+against a binary that was already built and pushed separately (there's no Godot editor
+on a RunPod pod to export with; `remote/cli.py`'s pod-side invocation always passes
+`--no-build`). `simple_ppo_train` takes the same `--build/--no-build`,
+`--maze-bots-path`, and `--export-type` options.
 
 **Without `--env-path`** (two terminals, connects to an already-running instance):
 ```bash

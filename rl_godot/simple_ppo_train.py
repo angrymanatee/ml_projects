@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any, cast
 
 import mlflow
@@ -22,6 +23,7 @@ from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepR
 import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for --rl-config
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
+from rl_godot.export_env import MAZE_BOTS_PATH_OPTION, ExportType, build_env
 
 app = typer.Typer(add_completion=False)
 
@@ -108,6 +110,16 @@ def main(
         "passed to the launched Godot process as -- --rl-config=res://configs/"
         "<name>.cfg. Requires --env-path — there's no process to pass it to otherwise.",
     ),
+    build: bool = typer.Option(
+        True,
+        "--build/--no-build",
+        help="Export a fresh maze_bots binary before launching (only when --env-path "
+        "is given). Pass --no-build when running externally against a binary that "
+        "was already built and pushed separately (e.g. on a RunPod pod, which has no "
+        "Godot editor to export with).",
+    ),
+    maze_bots_path: Path = MAZE_BOTS_PATH_OPTION,
+    export_type: ExportType = ExportType.DEBUG,
     experiment: str = typer.Option("GodotMazeBots_PPO", "--experiment"),
     run_name: str | None = typer.Option(None, "--run-name"),
     device: str = typer.Option(
@@ -131,10 +143,15 @@ def main(
 
     With --env-path: launches and owns the Godot process itself (an exported binary, no
     platform suffix — godot_rl appends .app/.x86_64/.exe based on the host platform), no
-    second terminal needed.
+    second terminal needed. By default this also re-exports maze_bots from
+    --maze-bots-path first (--build/--no-build); pass --no-build to train against an
+    already-built binary as-is.
     """
     if rl_config is not None and env_path is None:
         raise typer.BadParameter("--rl-config requires --env-path")
+
+    if build and env_path is not None:
+        build_env(maze_bots_path, export_type)
 
     # VecMonitor is what populates SB3's ep_info_buffer; without it the `rollout/`
     # block (ep_rew_mean) never prints, since SB3 only auto-wraps non-VecEnvs.

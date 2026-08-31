@@ -18,6 +18,13 @@ def test_godot_check_command_without_rl_config() -> None:
     assert "--rl-config" not in command
 
 
+def test_godot_check_command_skips_build() -> None:
+    # The pod has no maze_bots checkout or Godot editor — the binary is pushed
+    # pre-built, so re-exporting on the pod would fail.
+    command = _godot_check_command(RunPodConfig(api_key="test_key"), n_steps=20)
+    assert "--no-build" in command
+
+
 def test_godot_check_command_with_rl_config() -> None:
     command = _godot_check_command(
         RunPodConfig(api_key="test_key"), n_steps=20, rl_config="no_rays"

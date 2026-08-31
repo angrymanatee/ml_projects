@@ -414,7 +414,8 @@ def _godot_check_command(
     command = (
         f"cd {config.remote_project_dir} && "
         f"python -m rl_godot.constant_action_check "
-        f"--env-path {config.remote_godot_build_dir}/MazeBots --n-steps {n_steps}"
+        f"--env-path {config.remote_godot_build_dir}/MazeBots --n-steps {n_steps} "
+        f"--no-build"
     )
     if rl_config is not None:
         command += f" --rl-config {rl_config}"
