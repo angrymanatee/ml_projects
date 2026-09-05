@@ -166,6 +166,36 @@ SB3 has no MLflow model flavor, so these are plain artifacts, not registered mod
 with `PPO.load(<downloaded path>)`. The env isn't in the zip, so a reloaded model needs
 `set_env()` before further training.
 
+## `rl_godot/play_model.py`
+
+Loads a trained policy and runs it against a **visible** Godot window, so you can watch what it
+actually does rather than reading reward numbers. `simple_ppo_train` only evaluates in-process at
+the end of a training run, always headless — this is the separate "watch it play" tool.
+
+```bash
+uv run python -m rl_godot.play_model \
+  --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots \
+  --model-path /path/to/ppo_model.zip \
+  --map GoStraightTrap --rl-config watch
+```
+
+The model comes from either `--model-path` (a local `ppo_model.zip`) or `--run-id` (an MLflow run,
+downloaded to a temp dir; `--artifact-path` picks a checkpoint other than the default
+`model/ppo_model.zip`) — exactly one of the two. Takes the same `--env-path` / `--build` /
+`--rl-config` / `--map` / `--device` options as the other launchers, plus `--n-steps`,
+`--stochastic` (sample instead of taking the deterministic action), and `--speedup` (default `1`,
+i.e. real time — `simple_ppo_train` leaves it unset so training runs as fast as the engine will
+go). `--parallel` has no equivalent: it forces one env, since watching N windows defeats the point.
+No MLflow run is started; `--run-id` only *reads* a model.
+
+**The `--rl-config` you play under must have the same sensor settings as the config the policy was
+trained under.** Those settings determine the observation vector's width and meaning, so a mismatch
+either blows up on the first `predict()` or, worse, silently feeds the policy a differently-shaped
+world. `configs/watch.cfg` in maze_bots exists for exactly this: a byte-for-byte copy of
+`rl_config.cfg` with `debug_draw = true`, which turns on `RayFanSensor`'s debug overlay so you can
+see the ray fan (white = world, orange = enemy, red = trap) while the policy drives. Play a
+`no_rays`-trained policy under `no_rays`, not under `watch`.
+
 ## Running it on RunPod
 
 `remote/` (this repo's general RunPod CLI, otherwise used for `time_series` GPU training) has a
