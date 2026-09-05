@@ -1,7 +1,7 @@
 from rl_godot.env_launch import build_launch_cmd
 
 
-def test_no_rl_config_omits_separator() -> None:
+def test_no_user_args_omits_separator() -> None:
     cmd = build_launch_cmd(
         "/path/to/MazeBots.app",
         port=11008,
@@ -32,3 +32,57 @@ def test_rl_config_appended_after_separator() -> None:
     separator_index = tokens.index("--")
     assert tokens[separator_index + 1] == "--rl-config=res://configs/no_rays.cfg"
     assert tokens[-1] == "--rl-config=res://configs/no_rays.cfg"
+
+
+def test_map_appended_after_separator() -> None:
+    cmd = build_launch_cmd(
+        "/path/to/MazeBots.app",
+        port=11008,
+        seed=0,
+        show_window=False,
+        framerate=None,
+        action_repeat=None,
+        speedup=None,
+        rl_config=None,
+        map_name="GoStraightTrap",
+    )
+    tokens = cmd.split(" ")
+    separator_index = tokens.index("--")
+    assert tokens[separator_index + 1] == "--map=GoStraightTrap"
+
+
+def test_map_and_rl_config_share_one_separator() -> None:
+    cmd = build_launch_cmd(
+        "/path/to/MazeBots.app",
+        port=11008,
+        seed=0,
+        show_window=False,
+        framerate=None,
+        action_repeat=None,
+        speedup=None,
+        rl_config="no_rays",
+        map_name="GoStraightTrap",
+    )
+    tokens = cmd.split(" ")
+    assert tokens.count("--") == 1
+    separator_index = tokens.index("--")
+    assert tokens[separator_index + 1 :] == [
+        "--rl-config=res://configs/no_rays.cfg",
+        "--map=GoStraightTrap",
+    ]
+
+
+def test_res_path_map_passed_through_verbatim() -> None:
+    # MapSelection.ResolvePath accepts a full scene path as well as a bare name.
+    cmd = build_launch_cmd(
+        "/path/to/MazeBots.app",
+        port=11008,
+        seed=0,
+        show_window=False,
+        framerate=None,
+        action_repeat=None,
+        speedup=None,
+        rl_config=None,
+        map_name="res://maps/GoStraightTrap.tscn",
+    )
+    assert cmd.endswith("-- --map=res://maps/GoStraightTrap.tscn")

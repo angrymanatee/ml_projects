@@ -1,10 +1,15 @@
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
+import mlflow
 import numpy as np
 import pytest
 
-import mlflow
-from rl_godot.simple_ppo_train import MLflowWriter
+from rl_godot.simple_ppo_train import (
+    MLflowCheckpointCallback,
+    MLflowWriter,
+    log_model_to_mlflow,
+)
 
 
 @pytest.fixture
@@ -102,3 +107,63 @@ def test_step_defaults_to_zero(
     MLflowWriter().write({"train/loss": 0.5}, {})
 
     assert logged_metrics[0][1] == 0
+
+
+@pytest.fixture
+def logged_artifacts(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Capture mlflow.log_artifact calls as (local_filename, artifact_path) pairs."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_log_artifact(local_path: str, artifact_path: str | None = None) -> None:
+        assert Path(local_path).exists(), "artifact must still exist when logged"
+        calls.append((Path(local_path).name, artifact_path or ""))
+
+    monkeypatch.setattr(mlflow, "log_artifact", fake_log_artifact)
+    return calls
+
+
+class FakeSavableModel:
+    """Stands in for an SB3 algorithm: `save` is all `log_model_to_mlflow` uses."""
+
+    def save(self, path: Path) -> None:
+        Path(path).write_bytes(b"fake-sb3-zip")
+
+
+def test_log_model_to_mlflow_uploads_saved_zip(
+    logged_artifacts: list[tuple[str, str]],
+) -> None:
+    log_model_to_mlflow(cast(Any, FakeSavableModel()), "model")
+
+    assert logged_artifacts == [("ppo_model.zip", "model")]
+
+
+def _run_callback(
+    callback: MLflowCheckpointCallback, n_calls: int, num_envs: int
+) -> None:
+    """Drive `_on_step` the way SB3 does: one call per vec-env step."""
+    callback.model = cast(Any, FakeSavableModel())
+    for _ in range(n_calls):
+        callback.n_calls += 1
+        callback.num_timesteps += num_envs
+        callback._on_step()
+
+
+def test_checkpoint_callback_logs_on_frequency(
+    logged_artifacts: list[tuple[str, str]],
+) -> None:
+    callback = MLflowCheckpointCallback(checkpoint_freq=4, num_envs=1)
+    _run_callback(callback, n_calls=9, num_envs=1)
+
+    assert [path for _, path in logged_artifacts] == [
+        "checkpoints/step_000000004",
+        "checkpoints/step_000000008",
+    ]
+
+
+def test_checkpoint_callback_scales_frequency_by_num_envs() -> None:
+    # 4 envs step together, so 1000 timesteps is 250 _on_step calls.
+    assert MLflowCheckpointCallback(checkpoint_freq=1000, num_envs=4).call_freq == 250
+
+
+def test_checkpoint_callback_freq_never_drops_below_one() -> None:
+    assert MLflowCheckpointCallback(checkpoint_freq=2, num_envs=8).call_freq == 1

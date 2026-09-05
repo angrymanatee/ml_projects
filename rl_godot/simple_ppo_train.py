@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,12 +16,14 @@ import numpy as np
 import typer
 from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
 from stable_baselines3 import PPO
+from stable_baselines3.common.base_class import BaseAlgorithm
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
 from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecMonitor
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
-import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for --rl-config
+import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for user args
 from common.git import get_branch, get_sha
 from common.model_registry import TRACKING_URI
 from rl_godot.export_env import MAZE_BOTS_PATH_OPTION, ExportType, build_env
@@ -80,6 +83,41 @@ class MLflowWriter(KVWriter):
             mlflow.log_metrics(metrics, step=step)
 
 
+def log_model_to_mlflow(model: BaseAlgorithm, artifact_path: str) -> None:
+    """Log an SB3 model snapshot to the active MLflow run under `artifact_path`.
+
+    SB3 has no MLflow flavor, so this stores its native `.zip` (policy weights,
+    optimizer state, and hyperparameters) as a plain artifact. Reload it with
+    `PPO.load(<downloaded path>)`; the env is not part of the zip, so a reloaded
+    model needs `set_env()` before further training.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "ppo_model.zip"
+        model.save(path)
+        mlflow.log_artifact(str(path), artifact_path=artifact_path)
+
+
+class MLflowCheckpointCallback(BaseCallback):
+    """Logs a PPO snapshot to MLflow every `checkpoint_freq` env timesteps.
+
+    SB3's own `CheckpointCallback` writes to a local directory, which is useless
+    on an ephemeral RunPod pod — this uploads instead. `_on_step` fires once per
+    vec-env step (i.e. `num_envs` timesteps), so the call cadence is scaled down
+    by `num_envs` to keep the flag in timestep units regardless of --parallel.
+    """
+
+    def __init__(self, checkpoint_freq: int, num_envs: int) -> None:
+        super().__init__()
+        self.call_freq = max(checkpoint_freq // num_envs, 1)
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.call_freq == 0:
+            log_model_to_mlflow(
+                self.model, f"checkpoints/step_{self.num_timesteps:09d}"
+            )
+        return True
+
+
 @app.command()
 def main(
     total_timesteps: int = typer.Option(10_000, "--total-timesteps"),
@@ -110,6 +148,14 @@ def main(
         "passed to the launched Godot process as -- --rl-config=res://configs/"
         "<name>.cfg. Requires --env-path — there's no process to pass it to otherwise.",
     ),
+    map_name: str | None = typer.Option(
+        None,
+        "--map",
+        help="Map to load: a scene name under maze_bots/maps/ with no .tscn extension "
+        "(e.g. 'GoStraightTrap') or a full res:// path, passed to the launched Godot "
+        "process as -- --map=<name>. Requires --env-path — there's no process to pass "
+        "it to otherwise. Defaults to maze_bots' own default map (GoStraight).",
+    ),
     build: bool = typer.Option(
         True,
         "--build/--no-build",
@@ -134,6 +180,14 @@ def main(
         "--learning-rate",
         help="PPO Adam learning rate (SB3 default: 3e-4).",
     ),
+    checkpoint_freq: int = typer.Option(
+        5_000,
+        "--checkpoint-freq",
+        min=0,
+        help="Log an intermediate model snapshot to MLflow every N env timesteps "
+        "(summed across parallel envs). 0 disables checkpoints; the final model is "
+        "logged either way.",
+    ),
 ) -> None:
     """Train PPO on a maze_bots Godot instance, then roll out the learned policy.
 
@@ -146,9 +200,14 @@ def main(
     second terminal needed. By default this also re-exports maze_bots from
     --maze-bots-path first (--build/--no-build); pass --no-build to train against an
     already-built binary as-is.
+
+    --map selects which scene under maze_bots/maps/ to load (default GoStraight);
+    like --rl-config it only applies when this process launches Godot (--env-path).
     """
     if rl_config is not None and env_path is None:
         raise typer.BadParameter("--rl-config requires --env-path")
+    if map_name is not None and env_path is None:
+        raise typer.BadParameter("--map requires --env-path")
 
     if build and env_path is not None:
         build_env(maze_bots_path, export_type)
@@ -158,7 +217,11 @@ def main(
     env = VecMonitor(
         Float32ObsVecEnvWrapper(
             StableBaselinesGodotEnv(
-                env_path=env_path, port=port, n_parallel=n_parallel, rl_config=rl_config
+                env_path=env_path,
+                port=port,
+                n_parallel=n_parallel,
+                rl_config=rl_config,
+                map_name=map_name,
             )
         )
     )
@@ -203,6 +266,7 @@ def main(
                 "gamma": model.gamma,
                 "gae_lambda": model.gae_lambda,
                 "ent_coef": model.ent_coef,
+                "checkpoint_freq": checkpoint_freq,
             }
         )
 
@@ -214,7 +278,17 @@ def main(
                 output_formats=[MLflowWriter(), HumanOutputFormat(sys.stdout)],
             )
         )
-        model.learn(total_timesteps=total_timesteps)
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=(
+                MLflowCheckpointCallback(checkpoint_freq, env.num_envs)
+                if checkpoint_freq > 0
+                else None
+            ),
+        )
+        # Logged before the eval rollout so a crash there doesn't cost the
+        # trained weights.
+        log_model_to_mlflow(model, "model")
 
         obs = env.reset()
         print(f"reset obs: {obs}")

@@ -5,8 +5,8 @@ Reinforcement-learning interface between this repo and `maze_bots` — a separat
 environment. This project is Python-only; the game itself, its C#/GDScript RL bridge, and the
 Godot-side `godot_rl_agents` addon all live in that other repo.
 
-**Status: interface verified end to end, including on RunPod.** No real training (PPO, or any
-actual policy) exists yet — the constant-action check is the whole surface. Three phases so far:
+**Status: interface verified end to end, including on RunPod; PPO trains but doesn't learn
+anything useful yet.** Three phases so far:
 1. Local two-terminal wire-protocol check (Sync node + Python client).
 2. Exported Godot binary, Python launches it directly (`--env-path`, one terminal).
 3. Same check running entirely on a RunPod CPU pod (`remote godot run`).
@@ -126,6 +126,46 @@ loaded manually (as `RLConfig.cs` does) isn't one. Without that filter, `--rl-co
 falls back to scene defaults (`RLConfig: could not load ... (FileNotFound)` in the Godot log) —
 this bit us once already.
 
+### Selecting a map
+
+`maps/GoStraight.tscn` is the default; other scenes under `maze_bots/maps/` are selected with
+`--map <name>` (no `.tscn` extension, or a full `res://` path — `MapSelection.cs` accepts
+either) on `constant_action_check` / `simple_ppo_train`. Like `--rl-config` it requires
+`--env-path` and rides the same post-`--` user-args path built by `rl_godot/env_launch.py`;
+both flags share a single `--` separator when passed together:
+
+```bash
+uv run python -m rl_godot.constant_action_check \
+  --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots \
+  --map GoStraightTrap --rl-config no_rays
+```
+
+`remote/cli.py`'s `godot check` / `godot run` take `--map` too and forward it to the pod-side
+`constant_action_check`. In two-terminal mode, name the scene on the `godot-mono` command line
+as usual (`godot-mono --headless --path . maps/GoStraightTrap.tscn`) or pass
+`-- --map=GoStraightTrap` after your own flags.
+
+## `rl_godot/simple_ppo_train.py`
+
+Trains SB3 PPO (`MultiInputPolicy` — godot_rl always exposes a Dict obs space) against a
+maze_bots instance, then rolls the learned policy out for `--eval-steps` steps. Takes the same
+`--env-path` / `--build` / `--rl-config` / `--map` / `--parallel` options as
+`constant_action_check`, plus `--total-timesteps`, `--n-steps`, `--learning-rate`, and
+`--device` (pass `--device mps` explicitly on Apple Silicon — SB3's `auto` only looks for CUDA).
+
+### Model artifacts in MLflow
+
+Every run logs the trained policy to its MLflow run as SB3's native `.zip`:
+
+- `model/ppo_model.zip` — final model, logged right after `learn()` (before the eval rollout, so
+  a crash there doesn't cost the weights).
+- `checkpoints/step_<timesteps>/ppo_model.zip` — intermediate snapshots every
+  `--checkpoint-freq` env timesteps (default 5000, summed across parallel envs; `0` disables).
+
+SB3 has no MLflow model flavor, so these are plain artifacts, not registered models — reload
+with `PPO.load(<downloaded path>)`. The env isn't in the zip, so a reloaded model needs
+`set_env()` before further training.
+
 ## Running it on RunPod
 
 `remote/` (this repo's general RunPod CLI, otherwise used for `time_series` GPU training) has a
@@ -187,5 +227,5 @@ package on `sys.path`.
 
 ## Not yet designed
 
-Real training (an actual RL algorithm/policy, not a constant action) — everything so far is
-interface plumbing.
+Reward shaping and hyperparameter tuning that make PPO actually learn the task — `simple_ppo_train`
+runs end to end and logs models, but the resulting policy is no good yet.

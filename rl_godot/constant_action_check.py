@@ -190,6 +190,14 @@ def main(
         "passed to the launched Godot process as -- --rl-config=res://configs/"
         "<name>.cfg. Requires --env-path — there's no process to pass it to otherwise.",
     ),
+    map_name: str | None = typer.Option(
+        None,
+        "--map",
+        help="Map to load: a scene name under maze_bots/maps/ with no .tscn extension "
+        "(e.g. 'GoStraightTrap') or a full res:// path, passed to the launched Godot "
+        "process as -- --map=<name>. Requires --env-path — there's no process to pass "
+        "it to otherwise. Defaults to maze_bots' own default map (GoStraight).",
+    ),
     build: bool = typer.Option(
         True,
         "--build/--no-build",
@@ -224,6 +232,9 @@ def main(
     --maze-bots-path first (--build/--no-build); pass --no-build to launch an
     already-built binary as-is.
 
+    --map selects which scene under maze_bots/maps/ to load (default GoStraight);
+    like --rl-config it only applies when this process launches Godot (--env-path).
+
     --action-x/--action-y set the starting movement action (defaults reproduce the
     original hardcoded straight-to-goal action); --action-rotation sets the constant
     turn value. --gui opens a window that also lets you edit the movement action live
@@ -232,15 +243,19 @@ def main(
     """
     from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
 
-    import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for --rl-config
+    import rl_godot.env_launch  # noqa: F401 — patches StableBaselinesGodotEnv for user args
 
     if rl_config is not None and env_path is None:
         raise typer.BadParameter("--rl-config requires --env-path")
+    if map_name is not None and env_path is None:
+        raise typer.BadParameter("--map requires --env-path")
 
     if build and env_path is not None:
         build_env(maze_bots_path, export_type)
 
-    env = StableBaselinesGodotEnv(env_path=env_path, port=port, rl_config=rl_config)
+    env = StableBaselinesGodotEnv(
+        env_path=env_path, port=port, rl_config=rl_config, map_name=map_name
+    )
     # One row per agent/env instance; rl_agent.gd's action space is a 2-float
     # continuous "movement" key plus a 1-float "rotation" key, and this scene
     # has one agent.
