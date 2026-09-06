@@ -86,3 +86,44 @@ def test_res_path_map_passed_through_verbatim() -> None:
         map_name="res://maps/GoStraightTrap.tscn",
     )
     assert cmd.endswith("-- --map=res://maps/GoStraightTrap.tscn")
+
+
+def test_layout_config_and_seed_share_the_separator() -> None:
+    cmd = build_launch_cmd(
+        "/path/to/MazeBots.app",
+        port=11008,
+        seed=0,
+        show_window=False,
+        framerate=None,
+        action_repeat=None,
+        speedup=None,
+        rl_config="watch",
+        map_name="GoStraightTrap",
+        layout_config="layout_GoStraightTrap",
+        layout_seed=99,
+    )
+    tokens = cmd.split(" ")
+    assert tokens.count("--") == 1
+    separator_index = tokens.index("--")
+    assert tokens[separator_index + 1 :] == [
+        "--rl-config=res://configs/watch.cfg",
+        "--map=GoStraightTrap",
+        "--layout-config=res://configs/layout_GoStraightTrap.cfg",
+        "--layout-seed=99",
+    ]
+
+
+def test_layout_args_omitted_when_unset() -> None:
+    cmd = build_launch_cmd(
+        "/path/to/MazeBots.app",
+        port=11008,
+        seed=0,
+        show_window=False,
+        framerate=None,
+        action_repeat=None,
+        speedup=None,
+        rl_config=None,
+        map_name=None,
+    )
+    assert "--" not in cmd.split(" ")
+    assert "layout" not in cmd
