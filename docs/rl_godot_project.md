@@ -17,11 +17,17 @@ anything useful yet.** Three phases so far:
 
 ## How the two repos fit together
 
-- `maze_bots` has a `Sync` node (from the vendored `godot_rl_agents` addon) that opens a TCP
-  server (default port `11008`) when a scene has `EnableRlSync = true` on its `GameRunnerBase`
-  (see that repo's `docs/superpowers/specs/2026-07-31-godot-rl-sync-node-design.md`).
-  `maps/GoStraight.tscn` has this on by default — it's also the normal manual-play map now, with
-  its controller swapped to `RLController`.
+- `maze_bots` has a `Sync` node (from the vendored `godot_rl_agents` addon) that dials the
+  Python client's TCP server (default port `11008` — Godot is the client here, Python listens),
+  then pauses the scene tree until the handshake completes.
+  `GameRunnerBase` creates that node only when the process was launched with a `--port=`
+  argument, which is the signal `rl_godot/env_launch.py` always emits and nothing else does —
+  not the Godot editor, not the gdUnit4 runner. So loading an RL map outside a training run no
+  longer blocks on a client that will never connect. There is no scene-level flag to set
+  (`EnableRlSync` was removed); `maps/GoStraight.tscn` and `maps/GoStraightTrap.tscn` both spawn
+  an `RLController` and both load fine with or without a client attached. A launch where the two
+  signals disagree — an RL map with no `--port=`, or `--port=` with no `RLController` — logs a
+  Godot warning, since either way the run would otherwise sit silently inert.
 - That `Sync` node drives an `RLController`/`rl_agent.gd` bridge: observations are a **dict**
   keyed by lowercased `ObservationKind` — `"goalbearing"` (3-float body-frame `[cos, sin,
   log(1+range)]` to the goal) and `"rays"` (a 16-ray body-frame ray fan, 3 floats/ray — one
