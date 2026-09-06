@@ -145,6 +145,65 @@ uv run python -m rl_godot.constant_action_check \
 as usual (`godot-mono --headless --path . maps/GoStraightTrap.tscn`) or pass
 `-- --map=GoStraightTrap` after your own flags.
 
+## Layout randomization
+
+maze_bots can resample four things per episode — spawn position, spawn facing, goal position,
+and trap position — from ranges declared in a `[layout]` config section (`maps/LayoutSampler.cs`,
+`maps/MapBase.cs` on the Godot side). Without this, PPO trains against one fixed geometry and can
+memorize a shortcut instead of learning to navigate.
+
+`--layout-config <name>` on `constant_action_check` / `simple_ppo_train` / `play_model` selects a
+config under `maze_bots/configs/`, no `.cfg` extension (e.g. `layout_GoStraightTrap`). It rides
+the same post-`--` user-args path as `--rl-config`/`--map` — `rl_godot/env_launch.py` appends
+`--layout-config=res://configs/<name>.cfg` after the shared `--` separator. Leave it unset and
+`MapBase.RandomizeLayout` stays `false`: every scene behaves exactly as it did before this
+feature existed, nothing changes unless you opt in. A layout config's ranges are authored against
+one specific map's geometry, and `MapBase` checks this at startup — loading a config whose
+declared `map` doesn't match the `--map` actually in use logs a `GD.PushError` and disables
+randomization rather than sampling spawns into walls, so pass a config that matches whatever map
+you're running:
+
+```bash
+uv run python -m rl_godot.simple_ppo_train \
+  --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots \
+  --map GoStraightTrap --layout-config layout_GoStraightTrap --seed 0
+```
+
+`--seed` (new on `simple_ppo_train` / `play_model` — every run before this exposed it trained
+under the implicit SB3 default of base seed `0`) sets the base env seed passed to
+`StableBaselinesGodotEnv`; worker `p` launches with `seed + p`. Each episode's layout is then
+derived deterministically from `(env_seed, episode_index)` on the Godot side
+(`LayoutSampler.DeriveSeed`), so `--seed` is really "which slice of the layout distribution to
+train on," not just an RNG nicety. `--layout-seed <n>` overrides that per-episode derivation
+entirely and pins *every* episode to the one layout seed `n` — for staring at a specific
+spawn/goal/trap arrangement while debugging, or for reproducing a `play_model` rollout
+frame-for-frame.
+
+Held-out evaluation is a seed band, not a separate distribution: train on `--seed 0`–`999`,
+evaluate on `--seed 10000` and up, both against the *same* `layout_*_eval.cfg` (its ranges are
+identical to the training config on purpose). Evaluating against a config with different ranges
+would measure transfer to a new distribution rather than generalization within the trained one;
+the gap between train-band and held-out-band success rate is the actual generalization signal
+this feature exists to produce.
+
+`simple_ppo_train` logs `seed`, `layout_config` (`"scene-defaults"` when unset), `layout_seed`
+(`"per-episode"` when unset), and `layout_config_sha256` as MLflow params. The digest matters
+because the seed alone doesn't pin down a training distribution: editing
+`layout_GoStraightTrap.cfg` and rerunning under the same `--seed` silently trains against
+different ranges, and the digest is what lets you tell, reading the run months later, whether two
+runs actually trained under the same layout config or just the same filename.
+
+Two gotchas worth knowing before touching the `.cfg` files themselves:
+
+- **`trap_on_path_probability` must stay strictly below `1.0`.** At `1.0` the trap always blocks
+  the direct spawn-to-goal route, which makes an unconditional detour optimal again — exactly the
+  memorized-shortcut failure mode this feature exists to break.
+- **Layout configs must live flat under `configs/`, not in a subdirectory** — `export_presets.cfg`'s
+  `include_filter` is `configs/*.cfg`, a non-recursive glob (the same constraint `--rl-config`
+  configs already have; see "Selecting an RL config" above). A layout config tucked into a
+  subdirectory silently fails to pack into an export and falls back to scene defaults with only a
+  log line — this bit `--rl-config` once already, and would do the same here.
+
 ## `rl_godot/simple_ppo_train.py`
 
 Trains SB3 PPO (`MultiInputPolicy` — godot_rl always exposes a Dict obs space) against a
