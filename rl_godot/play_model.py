@@ -1,7 +1,7 @@
 """Watch a trained SB3 PPO policy play maze_bots in a visible Godot window.
 
 Run with:
-    uv run python -m rl_godot.play_model --model-path path/to/ppo_model.zip \
+    uv run python -m rl_godot.play_model --run-name unique-ram-468 \
         --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots
 """
 
@@ -26,6 +26,7 @@ from rl_godot.simple_ppo_train import Float32ObsVecEnvWrapper
 app = typer.Typer(add_completion=False)
 
 DEFAULT_ARTIFACT_PATH = "model/ppo_model.zip"
+DEFAULT_EXPERIMENT = "GodotMazeBots_PPO"
 
 MODEL_PATH_OPTION = typer.Option(
     None,
@@ -34,29 +35,70 @@ MODEL_PATH_OPTION = typer.Option(
 )
 
 
+def resolve_run_name(client: MlflowClient, run_name: str, experiment: str) -> str:
+    """Resolve an MLflow run name to a run id within `experiment`.
+
+    Run names are not unique in MLflow — training the same config twice under one
+    --run-name is normal — so several matches resolve to the most recent rather
+    than failing, and the choice is printed so it is never silent.
+    """
+    found = client.get_experiment_by_name(experiment)
+    if found is None:
+        raise typer.BadParameter(f"no MLflow experiment named {experiment!r}")
+
+    runs = client.search_runs(
+        [found.experiment_id],
+        filter_string=f"attributes.run_name = '{run_name}'",
+        order_by=["attributes.start_time DESC"],
+    )
+    if not runs:
+        raise typer.BadParameter(
+            f"no run named {run_name!r} in experiment {experiment!r}"
+        )
+    if len(runs) > 1:
+        print(
+            f"{len(runs)} runs named {run_name!r}; using the most recent "
+            f"({runs[0].info.run_id})"
+        )
+    else:
+        print(f"resolved {run_name!r} to run {runs[0].info.run_id}")
+    return runs[0].info.run_id
+
+
 def resolve_model_path(
     model_path: Path | None,
     run_id: str | None,
+    run_name: str | None,
     artifact_path: str | None,
+    experiment: str,
 ) -> Path:
-    """Resolve the --model-path/--run-id CLI options to a local ppo_model.zip path.
+    """Resolve the model-source CLI options to a local ppo_model.zip path.
 
-    Downloads from MLflow into a fresh temp dir when --run-id is given. The temp
-    dir is intentionally never cleaned up — this is a short-lived CLI process, and
-    the OS reclaims /tmp eventually, so it's not worth the teardown bookkeeping.
+    Exactly one of --model-path / --run-id / --run-name is required. The MLflow
+    sources download into a fresh temp dir that is intentionally never cleaned up
+    — this is a short-lived CLI process, and the OS reclaims /tmp eventually, so
+    it's not worth the teardown bookkeeping.
     """
-    if model_path is not None and run_id is not None:
-        raise typer.BadParameter("pass either --model-path or --run-id, not both")
+    sources = [
+        source for source in (model_path, run_id, run_name) if source is not None
+    ]
+    if len(sources) > 1:
+        raise typer.BadParameter(
+            "pass exactly one of --model-path, --run-id, or --run-name"
+        )
     if model_path is not None:
         if artifact_path is not None:
-            raise typer.BadParameter("--artifact-path requires --run-id")
+            raise typer.BadParameter("--artifact-path requires --run-id or --run-name")
         return model_path
-    # Ordered after the --model-path return rather than paired with the both-given
-    # check above, so the type checker narrows run_id to str for the download below.
-    if run_id is None:
-        raise typer.BadParameter("pass one of --model-path or --run-id")
 
     client = MlflowClient(tracking_uri=TRACKING_URI)
+    if run_name is not None:
+        run_id = resolve_run_name(client, run_name, experiment)
+    # Checked after the --run-name branch has had its chance to supply one, which
+    # also narrows run_id to str for the download below.
+    if run_id is None:
+        raise typer.BadParameter("pass one of --model-path, --run-id, or --run-name")
+
     dst_dir = tempfile.mkdtemp(prefix="play_model_")
     downloaded = client.download_artifacts(
         run_id, artifact_path or DEFAULT_ARTIFACT_PATH, dst_path=dst_dir
@@ -73,11 +115,26 @@ def main(
         help="MLflow run id to download the model from. Mutually exclusive with "
         "--model-path.",
     ),
+    run_name: str | None = typer.Option(
+        None,
+        "--run-name",
+        help="MLflow run name to download the model from, resolved within "
+        "--experiment. Run names are not unique; several matches resolve to the "
+        "most recent, and the chosen run id is printed. Mutually exclusive with "
+        "--model-path and --run-id.",
+    ),
+    experiment: str = typer.Option(
+        DEFAULT_EXPERIMENT,
+        "--experiment",
+        help="MLflow experiment searched by --run-name. Ignored otherwise.",
+    ),
     artifact_path: str | None = typer.Option(
         None,
         "--artifact-path",
-        help=f"Artifact path under --run-id (default: {DEFAULT_ARTIFACT_PATH!r}). "
-        "Requires --run-id.",
+        help=f"Artifact path under the MLflow run (default: "
+        f"{DEFAULT_ARTIFACT_PATH!r}); e.g. "
+        "'checkpoints/step_000005000/ppo_model.zip' for an intermediate snapshot. "
+        "Requires --run-id or --run-name.",
     ),
     env_path: str | None = typer.Option(
         None,
@@ -139,8 +196,8 @@ def main(
 ) -> None:
     """Load a trained PPO policy and run it against a visible maze_bots window.
 
-    Model source is either a local --model-path or an MLflow --run-id (downloaded
-    via the MLflow client into a temp dir); exactly one is required. Env
+    Model source is a local --model-path, or an MLflow --run-id or --run-name
+    (downloaded via the MLflow client into a temp dir); exactly one is required. Env
     construction mirrors simple_ppo_train.py but forces n_parallel=1 (watching N
     windows defeats the point) and show_window=True. This tool does not start or
     log to an MLflow run — --run-id only reads a model from the existing run.
@@ -150,7 +207,9 @@ def main(
     if map_name is not None and env_path is None:
         raise typer.BadParameter("--map requires --env-path")
 
-    resolved_model_path = resolve_model_path(model_path, run_id, artifact_path)
+    resolved_model_path = resolve_model_path(
+        model_path, run_id, run_name, artifact_path, experiment
+    )
 
     if build and env_path is not None:
         build_env(maze_bots_path, export_type)

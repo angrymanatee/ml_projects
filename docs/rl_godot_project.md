@@ -175,13 +175,25 @@ the end of a training run, always headless — this is the separate "watch it pl
 ```bash
 uv run python -m rl_godot.play_model \
   --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots \
-  --model-path /path/to/ppo_model.zip \
+  --run-name unique-ram-468 \
   --map GoStraightTrap --rl-config watch
 ```
 
-The model comes from either `--model-path` (a local `ppo_model.zip`) or `--run-id` (an MLflow run,
-downloaded to a temp dir; `--artifact-path` picks a checkpoint other than the default
-`model/ppo_model.zip`) — exactly one of the two. Takes the same `--env-path` / `--build` /
+The model comes from exactly one of three sources:
+
+- `--model-path` — a local `ppo_model.zip`.
+- `--run-id` — an MLflow run id (the 32-char hex one), downloaded to a temp dir.
+- `--run-name` — an MLflow run name, resolved to a run id within `--experiment` (default
+  `GodotMazeBots_PPO`). Run names are **not** unique in MLflow — training twice under one
+  `--run-name` is normal — so several matches resolve to the most recent, and the chosen run id is
+  printed rather than picked silently.
+
+`--artifact-path` selects an artifact other than the default `model/ppo_model.zip` within the run,
+e.g. `checkpoints/step_000005000/ppo_model.zip` for an intermediate snapshot (the step number is
+9-digit zero-padded — `MLflowCheckpointCallback` formats it as `step_{timesteps:09d}`). It requires
+`--run-id` or `--run-name`; there is nothing to look it up in otherwise.
+
+Takes the same `--env-path` / `--build` /
 `--rl-config` / `--map` / `--device` options as the other launchers, plus `--n-steps`,
 `--stochastic` (sample instead of taking the deterministic action), and `--speedup` (default `1`,
 i.e. real time — `simple_ppo_train` leaves it unset so training runs as fast as the engine will

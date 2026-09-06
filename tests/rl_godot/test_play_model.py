@@ -1,5 +1,6 @@
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import gymnasium as gym
 import numpy as np
@@ -7,7 +8,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from rl_godot.play_model import app, resolve_model_path
+from rl_godot.play_model import app, resolve_model_path, resolve_run_name
 
 runner = CliRunner()
 
@@ -15,25 +16,52 @@ runner = CliRunner()
 # --- resolve_model_path unit tests ---
 
 
-def test_rejects_both_model_path_and_run_id() -> None:
+EXPERIMENT = "GodotMazeBots_PPO"
+
+
+def make_run(run_id: str):
+    """Minimal stand-in for an MLflow Run — only `.info.run_id` is read."""
+    run = SimpleNamespace()
+    run.info = SimpleNamespace(run_id=run_id)
+    return run
+
+
+@pytest.mark.parametrize(
+    "model_path,run_id,run_name",
+    [
+        (Path("model.zip"), "run123", None),
+        (Path("model.zip"), None, "unique-ram-468"),
+        (None, "run123", "unique-ram-468"),
+        (Path("model.zip"), "run123", "unique-ram-468"),
+    ],
+)
+def test_rejects_more_than_one_model_source(
+    model_path: Path | None, run_id: str | None, run_name: str | None
+) -> None:
     with pytest.raises(typer.BadParameter):
-        resolve_model_path(Path("model.zip"), "run123", None)
+        resolve_model_path(model_path, run_id, run_name, None, EXPERIMENT)
 
 
-def test_rejects_neither_model_path_nor_run_id() -> None:
+def test_rejects_no_model_source() -> None:
     with pytest.raises(typer.BadParameter):
-        resolve_model_path(None, None, None)
+        resolve_model_path(None, None, None, None, EXPERIMENT)
 
 
-def test_rejects_artifact_path_without_run_id() -> None:
+def test_rejects_artifact_path_with_model_path() -> None:
     with pytest.raises(typer.BadParameter):
         resolve_model_path(
-            Path("model.zip"), None, "checkpoints/step_000005000/ppo_model.zip"
+            Path("model.zip"),
+            None,
+            None,
+            "checkpoints/step_000005000/ppo_model.zip",
+            EXPERIMENT,
         )
 
 
 def test_model_path_returned_unchanged() -> None:
-    assert resolve_model_path(Path("model.zip"), None, None) == Path("model.zip")
+    assert resolve_model_path(Path("model.zip"), None, None, None, EXPERIMENT) == Path(
+        "model.zip"
+    )
 
 
 def test_run_id_downloads_default_artifact_path() -> None:
@@ -43,7 +71,7 @@ def test_run_id_downloads_default_artifact_path() -> None:
             "/tmp/play_model_xyz/ppo_model.zip"
         )
 
-        result = resolve_model_path(None, "run123", None)
+        result = resolve_model_path(None, "run123", None, None, EXPERIMENT)
 
     mock_client.download_artifacts.assert_called_once()
     call_args = mock_client.download_artifacts.call_args
@@ -59,10 +87,75 @@ def test_run_id_downloads_custom_artifact_path() -> None:
             "/tmp/play_model_xyz/ppo_model.zip"
         )
 
-        resolve_model_path(None, "run123", "checkpoints/step_000005000/ppo_model.zip")
+        resolve_model_path(
+            None,
+            "run123",
+            None,
+            "checkpoints/step_000005000/ppo_model.zip",
+            EXPERIMENT,
+        )
 
     call_args = mock_client.download_artifacts.call_args
     assert call_args.args[1] == "checkpoints/step_000005000/ppo_model.zip"
+
+
+# --- resolve_run_name unit tests ---
+
+
+def test_run_name_resolves_to_run_id() -> None:
+    client = MagicMock()
+    client.get_experiment_by_name.return_value = SimpleNamespace(experiment_id="0")
+    client.search_runs.return_value = [make_run("run123")]
+
+    assert resolve_run_name(client, "unique-ram-468", EXPERIMENT) == "run123"
+    filter_string = client.search_runs.call_args.kwargs["filter_string"]
+    assert filter_string == "attributes.run_name = 'unique-ram-468'"
+
+
+def test_run_name_picks_most_recent_of_several() -> None:
+    client = MagicMock()
+    client.get_experiment_by_name.return_value = SimpleNamespace(experiment_id="0")
+    client.search_runs.return_value = [make_run("newest"), make_run("older")]
+
+    assert resolve_run_name(client, "retry", EXPERIMENT) == "newest"
+    # Ordering is the server's job, not ours — assert we asked for it.
+    assert client.search_runs.call_args.kwargs["order_by"] == [
+        "attributes.start_time DESC"
+    ]
+
+
+def test_run_name_rejects_unknown_experiment() -> None:
+    client = MagicMock()
+    client.get_experiment_by_name.return_value = None
+
+    with pytest.raises(typer.BadParameter):
+        resolve_run_name(client, "unique-ram-468", "NoSuchExperiment")
+
+
+def test_run_name_rejects_no_match() -> None:
+    client = MagicMock()
+    client.get_experiment_by_name.return_value = SimpleNamespace(experiment_id="0")
+    client.search_runs.return_value = []
+
+    with pytest.raises(typer.BadParameter):
+        resolve_run_name(client, "nope", EXPERIMENT)
+
+
+def test_run_name_downloads_via_resolved_run_id() -> None:
+    with patch("rl_godot.play_model.MlflowClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.get_experiment_by_name.return_value = SimpleNamespace(
+            experiment_id="0"
+        )
+        mock_client.search_runs.return_value = [make_run("run123")]
+        mock_client.download_artifacts.return_value = (
+            "/tmp/play_model_xyz/ppo_model.zip"
+        )
+
+        result = resolve_model_path(None, None, "unique-ram-468", None, EXPERIMENT)
+
+    assert mock_client.download_artifacts.call_args.args[0] == "run123"
+    assert result == Path("/tmp/play_model_xyz/ppo_model.zip")
 
 
 # --- CLI validation ---
