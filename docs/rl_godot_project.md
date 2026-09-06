@@ -31,10 +31,12 @@ anything useful yet.** Three phases so far:
   continuous `"rotation"` key. Reward and an episode-`done` signal both flow through the same
   bridge (`done` fires when `GoalReachGame` ends a round — reaching the goal, dying, or timing
   out).
-- `maze_bots/scripts/export.sh` produces headless-runnable macOS/Linux exports at
-  `maze_bots/build/{macos,linux}/` — gitignored build artifacts, not committed. Either the Python
-  side connects to a manually-launched `godot-mono` process, or (preferred) launches an exported
-  binary itself via `--env-path`.
+- `maze_bots/scripts/export.sh [debug|release] [macos|linux|all]` produces headless-runnable
+  exports at `maze_bots/build/{macos,linux}/` — gitignored build artifacts, not committed. The
+  target defaults to the host platform, so a local run builds only the macOS binary; the Linux
+  binary is cross-exported explicitly (`scripts/export.sh debug linux`) for the RunPod flow.
+  Either the Python side connects to a manually-launched `godot-mono` process, or (preferred)
+  launches an exported binary itself via `--env-path`.
 - This repo's `rl_godot/` is the Python side of that TCP connection, plus (via `remote/`) the
   RunPod deployment that runs both halves on a pod.
 
@@ -48,8 +50,8 @@ uv run python -m rl_godot.export_env
 ```
 
 Defaults `--maze-bots-path` to `/Users/sauron/GodotProjects/maze_bots`; override it if your
-checkout lives elsewhere. Prints the exported macOS/Linux binary paths and the exact
-`constant_action_check --env-path ...` command to run next. Same manual-tool status as
+checkout lives elsewhere. Builds only the host platform's binary and prints its path plus the
+exact `constant_action_check --env-path ...` command to run next. Same manual-tool status as
 `constant_action_check.py` below — needs a real `godot-mono` on `PATH`, not covered by `pytest`.
 
 ## `rl_godot/constant_action_check.py`
@@ -72,7 +74,7 @@ window is closed rather than for `--n-steps`.
 uv run python -m rl_godot.constant_action_check \
   --env-path /Users/sauron/GodotProjects/maze_bots/build/macos/MazeBots
 ```
-`--build` (default) re-exports maze_bots from `--maze-bots-path` before launching, so
+`--build` (default) re-exports maze_bots for the host platform from `--maze-bots-path` before launching, so
 there's no need to run `rl_godot.export_env` separately first — it's the same
 `build_env` helper, just invoked automatically. Pass `--no-build` to skip straight to
 launching the binary already at `--env-path` as-is — e.g. when running externally
@@ -285,7 +287,7 @@ uv run python -m remote godot check <pod-id> [--n-steps N]
 Since `Sync.gd` hardcodes `127.0.0.1` (loopback-only, not exposed over the network), the Python
 process and the Godot binary must run on the *same* machine — there's no "train locally against a
 remote game server" mode. `godot run` pushes both `rl_godot/` (Python) and the exported Linux
-binary (`maze_bots/build/linux/`, built via that repo's `scripts/export.sh`) to the same pod and
+binary (`maze_bots/build/linux/`, built via that repo's `scripts/export.sh debug linux`) to the same pod and
 runs the check there.
 
 **Setup prerequisites beyond `time_series`'s existing RunPod setup** (`docs/store_sales_project.md`),

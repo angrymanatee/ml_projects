@@ -98,13 +98,14 @@ def push_godot_build(
 
     Raises:
         FileNotFoundError: If <maze_bots_path>/build/linux does not exist locally
-            (run maze_bots's scripts/export.sh first).
+            (run maze_bots's `scripts/export.sh <type> linux` first — the export
+            defaults to the host platform only).
     """
     local_build_dir = maze_bots_path / "build" / "linux"
     if not local_build_dir.exists():
         raise FileNotFoundError(
             f"Linux export not found: {local_build_dir}\n"
-            "Run scripts/export.sh in the maze_bots repo first."
+            "Run `scripts/export.sh debug linux` in the maze_bots repo first."
         )
     run_remote(target, f"mkdir -p {config.remote_godot_build_dir}")
     _run_rsync(
