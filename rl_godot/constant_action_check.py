@@ -198,6 +198,21 @@ def main(
         "process as -- --map=<name>. Requires --env-path — there's no process to pass "
         "it to otherwise. Defaults to maze_bots' own default map (GoStraight).",
     ),
+    layout_config: str | None = typer.Option(
+        None,
+        "--layout-config",
+        help="Layout randomization config under maze_bots/configs/, no .cfg extension "
+        "(e.g. 'layout_GoStraightTrap'). Its sensor-independent ranges must suit the "
+        "--map being loaded. Requires --env-path — there's no process to pass it to "
+        "otherwise.",
+    ),
+    layout_seed: int | None = typer.Option(
+        None,
+        "--layout-seed",
+        help="Pin every episode to one fixed layout instead of deriving a new one per "
+        "episode from --seed. For debugging a specific layout and for deterministic "
+        "playback. Requires --env-path.",
+    ),
     build: bool = typer.Option(
         True,
         "--build/--no-build",
@@ -249,12 +264,21 @@ def main(
         raise typer.BadParameter("--rl-config requires --env-path")
     if map_name is not None and env_path is None:
         raise typer.BadParameter("--map requires --env-path")
+    if layout_config is not None and env_path is None:
+        raise typer.BadParameter("--layout-config requires --env-path")
+    if layout_seed is not None and env_path is None:
+        raise typer.BadParameter("--layout-seed requires --env-path")
 
     if build and env_path is not None:
         build_env(maze_bots_path, export_type)
 
     env = StableBaselinesGodotEnv(
-        env_path=env_path, port=port, rl_config=rl_config, map_name=map_name
+        env_path=env_path,
+        port=port,
+        rl_config=rl_config,
+        map_name=map_name,
+        layout_config=layout_config,
+        layout_seed=layout_seed,
     )
     # One row per agent/env instance; rl_agent.gd's action space is a 2-float
     # continuous "movement" key plus a 1-float "rotation" key, and this scene

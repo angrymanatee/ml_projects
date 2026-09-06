@@ -1,15 +1,20 @@
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 import mlflow
 import numpy as np
 import pytest
+from typer.testing import CliRunner
 
 from rl_godot.simple_ppo_train import (
     MLflowCheckpointCallback,
     MLflowWriter,
+    app,
     log_model_to_mlflow,
 )
+
+runner = CliRunner()
 
 
 @pytest.fixture
@@ -167,3 +172,31 @@ def test_checkpoint_callback_scales_frequency_by_num_envs() -> None:
 
 def test_checkpoint_callback_freq_never_drops_below_one() -> None:
     assert MLflowCheckpointCallback(checkpoint_freq=2, num_envs=8).call_freq == 1
+
+
+# --- CLI validation ---
+
+
+def test_layout_config_requires_env_path() -> None:
+    result = runner.invoke(app, ["--layout-config", "layout_GoStraightTrap"])
+    assert result.exit_code != 0
+
+
+def test_seed_reaches_the_env_constructor(tmp_path: Path) -> None:
+    with patch("rl_godot.simple_ppo_train.StableBaselinesGodotEnv") as mock_env_cls:
+        mock_env_cls.side_effect = RuntimeError("stop after construction")
+        runner.invoke(
+            app,
+            [
+                "--env-path",
+                str(tmp_path / "MazeBots"),
+                "--no-build",
+                "--seed",
+                "10000",
+                "--layout-config",
+                "layout_GoStraightTrap",
+            ],
+        )
+    kwargs = mock_env_cls.call_args.kwargs
+    assert kwargs["seed"] == 10000
+    assert kwargs["layout_config"] == "layout_GoStraightTrap"

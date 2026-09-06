@@ -6,6 +6,7 @@ Run with:
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import tempfile
 from pathlib import Path
@@ -97,6 +98,21 @@ def log_model_to_mlflow(model: BaseAlgorithm, artifact_path: str) -> None:
         mlflow.log_artifact(str(path), artifact_path=artifact_path)
 
 
+def _layout_config_digest(maze_bots_path: Path, layout_config: str | None) -> str:
+    """SHA-256 of the layout config's contents, or "none" when scene defaults are used.
+
+    The layout distribution depends on this file's contents, so the seed alone does not
+    identify a training distribution -- without the digest a checkpoint exists whose
+    layouts cannot be reconstructed.
+    """
+    if layout_config is None:
+        return "none"
+    path = maze_bots_path / "configs" / f"{layout_config}.cfg"
+    if not path.is_file():
+        return "missing"
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 class MLflowCheckpointCallback(BaseCallback):
     """Logs a PPO snapshot to MLflow every `checkpoint_freq` env timesteps.
 
@@ -156,6 +172,28 @@ def main(
         "process as -- --map=<name>. Requires --env-path — there's no process to pass "
         "it to otherwise. Defaults to maze_bots' own default map (GoStraight).",
     ),
+    layout_config: str | None = typer.Option(
+        None,
+        "--layout-config",
+        help="Layout randomization config under maze_bots/configs/, no .cfg extension "
+        "(e.g. 'layout_GoStraightTrap'). Its sensor-independent ranges must suit the "
+        "--map being loaded. Requires --env-path — there's no process to pass it to "
+        "otherwise.",
+    ),
+    layout_seed: int | None = typer.Option(
+        None,
+        "--layout-seed",
+        help="Pin every episode to one fixed layout instead of deriving a new one per "
+        "episode from --seed. For debugging a specific layout and for deterministic "
+        "playback. Requires --env-path.",
+    ),
+    seed: int = typer.Option(
+        0,
+        "--seed",
+        help="Base env seed. Worker p launches with seed + p, and each episode's layout "
+        "is derived from it, so this selects the training layout distribution. Use a "
+        "disjoint band (e.g. 10000+) for held-out evaluation.",
+    ),
     build: bool = typer.Option(
         True,
         "--build/--no-build",
@@ -208,6 +246,10 @@ def main(
         raise typer.BadParameter("--rl-config requires --env-path")
     if map_name is not None and env_path is None:
         raise typer.BadParameter("--map requires --env-path")
+    if layout_config is not None and env_path is None:
+        raise typer.BadParameter("--layout-config requires --env-path")
+    if layout_seed is not None and env_path is None:
+        raise typer.BadParameter("--layout-seed requires --env-path")
 
     if build and env_path is not None:
         build_env(maze_bots_path, export_type)
@@ -222,6 +264,9 @@ def main(
                 n_parallel=n_parallel,
                 rl_config=rl_config,
                 map_name=map_name,
+                seed=seed,
+                layout_config=layout_config,
+                layout_seed=layout_seed,
             )
         )
     )
@@ -252,6 +297,14 @@ def main(
                 "n_parallel": n_parallel,
                 "num_envs": env.num_envs,
                 "env_path": env_path or "editor",
+                "seed": seed,
+                "layout_config": layout_config or "scene-defaults",
+                "layout_config_sha256": _layout_config_digest(
+                    maze_bots_path, layout_config
+                ),
+                "layout_seed": (
+                    layout_seed if layout_seed is not None else "per-episode"
+                ),
                 "policy": "MultiInputPolicy",
                 # Resolved device, not the raw CLI value — 'auto' logs as whatever
                 # get_device() actually picked (e.g. 'cpu' when 'auto' misses MPS).

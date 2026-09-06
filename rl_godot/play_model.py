@@ -167,6 +167,28 @@ def main(
         help="Scene name under maze_bots/maps/, no .tscn extension. Requires "
         "--env-path.",
     ),
+    layout_config: str | None = typer.Option(
+        None,
+        "--layout-config",
+        help="Layout randomization config under maze_bots/configs/, no .cfg extension "
+        "(e.g. 'layout_GoStraightTrap'). Its sensor-independent ranges must suit the "
+        "--map being loaded. Requires --env-path — there's no process to pass it to "
+        "otherwise.",
+    ),
+    layout_seed: int | None = typer.Option(
+        None,
+        "--layout-seed",
+        help="Pin every episode to one fixed layout instead of deriving a new one per "
+        "episode from --seed. For debugging a specific layout and for deterministic "
+        "playback. Requires --env-path.",
+    ),
+    seed: int = typer.Option(
+        0,
+        "--seed",
+        help="Base env seed. Worker p launches with seed + p, and each episode's layout "
+        "is derived from it, so this selects the training layout distribution. Use a "
+        "disjoint band (e.g. 10000+) for held-out evaluation.",
+    ),
     speedup: int = typer.Option(
         1,
         "--speedup",
@@ -206,6 +228,10 @@ def main(
         raise typer.BadParameter("--rl-config requires --env-path")
     if map_name is not None and env_path is None:
         raise typer.BadParameter("--map requires --env-path")
+    if layout_config is not None and env_path is None:
+        raise typer.BadParameter("--layout-config requires --env-path")
+    if layout_seed is not None and env_path is None:
+        raise typer.BadParameter("--layout-seed requires --env-path")
 
     resolved_model_path = resolve_model_path(
         model_path, run_id, run_name, artifact_path, experiment
@@ -222,6 +248,9 @@ def main(
                 n_parallel=1,
                 rl_config=rl_config,
                 map_name=map_name,
+                seed=seed,
+                layout_config=layout_config,
+                layout_seed=layout_seed,
                 show_window=True,
                 speedup=speedup,
             )

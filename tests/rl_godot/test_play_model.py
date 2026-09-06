@@ -313,3 +313,33 @@ def test_device_passed_through_to_ppo_load(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     mock_ppo.load.assert_called_once_with(model_path, device="mps")
+
+
+def test_layout_config_requires_env_path() -> None:
+    result = runner.invoke(
+        app,
+        ["--model-path", "model.zip", "--layout-config", "layout_GoStraightTrap"],
+    )
+    assert result.exit_code != 0
+
+
+def test_seed_reaches_the_env_constructor(tmp_path: Path) -> None:
+    with patch("rl_godot.play_model.StableBaselinesGodotEnv") as mock_env_cls:
+        mock_env_cls.side_effect = RuntimeError("stop after construction")
+        runner.invoke(
+            app,
+            [
+                "--model-path",
+                str(tmp_path / "ppo_model.zip"),
+                "--env-path",
+                "/fake/MazeBots",
+                "--no-build",
+                "--seed",
+                "10000",
+                "--layout-config",
+                "layout_GoStraightTrap",
+            ],
+        )
+    kwargs = mock_env_cls.call_args.kwargs
+    assert kwargs["seed"] == 10000
+    assert kwargs["layout_config"] == "layout_GoStraightTrap"
