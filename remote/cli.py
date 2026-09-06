@@ -413,6 +413,7 @@ def _godot_check_command(
     n_steps: int,
     rl_config: str | None = None,
     map_name: str | None = None,
+    layout_config: str | None = None,
 ) -> str:
     command = (
         f"cd {config.remote_project_dir} && "
@@ -424,6 +425,8 @@ def _godot_check_command(
         command += f" --rl-config {rl_config}"
     if map_name is not None:
         command += f" --map {map_name}"
+    if layout_config is not None:
+        command += f" --layout-config {layout_config}"
     return command
 
 
@@ -467,12 +470,22 @@ def godot_check(
         "'GoStraightTrap') to pass through to the remote constant_action_check "
         "invocation.",
     ),
+    layout_config: str | None = typer.Option(
+        None,
+        "--layout-config",
+        help="Layout randomization config under maze_bots/configs/, no .cfg extension "
+        "(e.g. 'layout_GoStraightTrap') to pass through to the remote "
+        "constant_action_check invocation.",
+    ),
     config_path: Path = _CONFIG_OPTION,
 ) -> None:
     """Run the constant-action interface check on the pod."""
     config = load_config(config_path)
     target = get_ssh_target(config, pod_id)
-    run_remote(target, _godot_check_command(config, n_steps, rl_config, map_name))
+    run_remote(
+        target,
+        _godot_check_command(config, n_steps, rl_config, map_name, layout_config),
+    )
     typer.echo("Check complete.")
 
 
@@ -492,6 +505,13 @@ def godot_run(
         help="Map name under maze_bots/maps/, no .tscn extension (e.g. "
         "'GoStraightTrap') to pass through to the remote constant_action_check "
         "invocation.",
+    ),
+    layout_config: str | None = typer.Option(
+        None,
+        "--layout-config",
+        help="Layout randomization config under maze_bots/configs/, no .cfg extension "
+        "(e.g. 'layout_GoStraightTrap') to pass through to the remote "
+        "constant_action_check invocation.",
     ),
     on_complete: str | None = typer.Option(None, "--on-complete"),
     config_path: Path = _CONFIG_OPTION,
@@ -524,7 +544,10 @@ def godot_run(
         setup_godot_environment(target, config)
 
         typer.echo("Running interface check...")
-        run_remote(target, _godot_check_command(config, n_steps, rl_config, map_name))
+        run_remote(
+            target,
+            _godot_check_command(config, n_steps, rl_config, map_name, layout_config),
+        )
 
         _apply_on_complete(config, pod_id)
         pod_id = None
