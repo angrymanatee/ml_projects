@@ -31,8 +31,11 @@ anything useful yet.** Three phases so far:
 - That `Sync` node drives an `RLController`/`rl_agent.gd` bridge: observations are a **dict**
   keyed by lowercased `ObservationKind` — `"goalbearing"` (3-float body-frame `[cos, sin,
   log(1+range)]` to the goal) and `"rays"` (a 16-ray body-frame ray fan, 3 floats/ray — one
-  per class layer: world/enemy/trap — so 48 floats total, each in `[0, 1]`; enemy/trap
-  channels currently read zero, reserved for when those layers are populated). Actions are
+  per class layer: world/enemy/trap — so 48 floats total, each in `[0, 1]`. The encoding is a
+  scaled one-hot: the hit's class channel carries proximity (`1 - distance/RayLength`), the
+  others are zero, and a miss is all-zero — so a hit at the very edge of range is nearly
+  indistinguishable from nothing at all. The trap channel is live and verified; the enemy
+  channel reads zero because that layer is unpopulated). Actions are
   **body-frame**: a 2-float continuous `"movement"` key (`[forward, strafe]`) plus a 1-float
   continuous `"rotation"` key. Reward and an episode-`done` signal both flow through the same
   bridge (`done` fires when `GoalReachGame` ends a round — reaching the goal, dying, or timing
