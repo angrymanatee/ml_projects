@@ -9,16 +9,97 @@ after Godot's own `--` separator — so the stock kwargs mechanism can never rea
 them. Importing this module patches in a `GodotEnv` subclass (used by
 `StableBaselinesGodotEnv`) that inserts that separator when an `rl_config`,
 `map_name`, `layout_config`, or `layout_seed` kwarg is present.
+
+It also fixes a process leak in the upstream launcher: `GodotEnv._launch_env`
+Popens the Godot binary with `start_new_session=True` and upstream's own
+`GodotEnv.close()` never kills `self.proc` at all — it only sends a graceful
+"close" message over the wire socket and trusts Godot to exit on its own. If the
+Python process dies before that happens (crash, Ctrl-C, `kill`), the detached
+Godot child is reparented to init/launchd and runs forever, holding its port and
+RAM. `start_new_session=True` is kept here rather than dropped — upstream never
+had a kill path for it to be "protecting", and keeping it means a terminal's
+Ctrl-C (SIGINT to the foreground process group only) does *not* reach Godot
+directly; only Python does, which is what lets the cleanup below run a graceful
+terminate()-then-kill() instead of Godot dying mid-handshake in whatever way its
+default signal disposition happens to do. It also lets `os.killpg` below reach
+any child processes Godot itself spawns, which a shared-process-group child
+would not (killpg would then hit Python too). What was missing is the actual
+cleanup: every process this module launches is tracked in `_LAUNCHED_PROCESSES`
+and reaped by `_cleanup_launched_processes`, wired to both `atexit` (covers
+normal exit, an unhandled exception, and SIGINT once Python turns it into a
+`KeyboardInterrupt`) and an explicit `SIGTERM` handler (Python's default SIGTERM
+disposition kills the process immediately *without* running atexit handlers, so
+atexit alone would miss a plain `kill <pid>`).
 """
 
 from __future__ import annotations
 
+import atexit
+import contextlib
+import os
+import signal
 import subprocess
+import sys
 from sys import platform
 
 import godot_rl.wrappers.stable_baselines_wrapper as stable_baselines_wrapper
 from godot_rl.core.godot_env import GodotEnv
 from godot_rl.core.utils import convert_macos_path
+
+_LAUNCHED_PROCESSES: list[subprocess.Popen] = []
+_TERMINATE_TIMEOUT_SECONDS = 5.0
+
+
+def _terminate_launched_process(proc: subprocess.Popen) -> None:
+    """Terminate one launched Godot process (and its process group), if still alive.
+
+    `proc.poll()` reflects real OS process state regardless of whether
+    `GodotEnv.close()`'s graceful "close" message already ran, so a process that
+    exited cleanly on its own is simply skipped here rather than double-killed.
+    Sends SIGTERM to the whole process group first (`start_new_session=True` put
+    Godot in its own group, catching any children it spawned too) and only
+    escalates to SIGKILL if it hasn't exited within `_TERMINATE_TIMEOUT_SECONDS`.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=_TERMINATE_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pgid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=_TERMINATE_TIMEOUT_SECONDS)
+
+
+def _cleanup_launched_processes() -> None:
+    """Terminate every Godot process `_launch_env` has ever launched, if still alive."""
+    while _LAUNCHED_PROCESSES:
+        _terminate_launched_process(_LAUNCHED_PROCESSES.pop())
+
+
+def _handle_sigterm(signum: int, frame: object) -> None:
+    """Turn SIGTERM into a normal interpreter exit so the atexit cleanup runs.
+
+    Unlike SIGINT (which Python's default handler turns into a catchable
+    `KeyboardInterrupt`, unwinding normally into atexit), SIGTERM's default
+    disposition kills the process immediately with no atexit pass at all — so a
+    `kill <pid>`'d training run would otherwise leak its Godot children.
+    """
+    sys.exit(128 + signum)
+
+
+atexit.register(_cleanup_launched_processes)
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 def build_launch_cmd(
@@ -106,6 +187,7 @@ class _GodotEnvWithUserArgs(GodotEnv):
             **kwargs,
         )
         self.proc = subprocess.Popen(launch_cmd.split(" "), start_new_session=True)
+        _LAUNCHED_PROCESSES.append(self.proc)
 
 
 stable_baselines_wrapper.GodotEnv = _GodotEnvWithUserArgs

@@ -49,6 +49,41 @@ anything useful yet.** Three phases so far:
 - This repo's `rl_godot/` is the Python side of that TCP connection, plus (via `remote/`) the
   RunPod deployment that runs both halves on a pod.
 
+## Godot process lifecycle and cleanup
+
+`rl_godot/env_launch.py` launches the Godot binary with `start_new_session=True`
+(inherited from upstream `godot_rl.core.godot_env.GodotEnv._launch_env`, which this
+module patches). That detaches Godot into its own session/process group so a
+terminal's Ctrl-C (SIGINT to the foreground process group only) doesn't hit Godot
+directly — only Python does, which is what lets Python orchestrate a graceful
+shutdown instead of Godot dying mid-handshake in whatever way its own default
+signal disposition happens to do. Upstream's own `GodotEnv.close()` never actually
+kills `self.proc` — it only sends a "close" message over the socket and trusts
+Godot to exit on its own — so if the Python process died before that ran (crash,
+Ctrl-C, `kill`), the detached child used to be reparented to launchd and run
+forever, holding its port and RAM (confirmed in practice: an 8-day-old orphaned
+`MazeBots --port=11026 --env_seed=18` from a long-gone training run).
+
+`env_launch.py` now fixes this: every process it launches is tracked in a
+module-level registry and reaped on normal exit, an unhandled exception, SIGINT
+(via `atexit`, which Python's default `KeyboardInterrupt` unwind runs), and SIGTERM
+(via an explicit handler — Python's default SIGTERM disposition skips `atexit`
+entirely). Cleanup checks `proc.poll()` before signaling, so a process
+`GodotEnv.close()` already shut down gracefully is left alone rather than
+double-killed, and it prefers `terminate()` (SIGTERM to the whole process group via
+`os.killpg`) before escalating to `SIGKILL` after a 5s grace period.
+
+This cannot cover a SIGKILL'd parent or a hard crash — nothing runs in that case.
+For those, `rl_godot/kill_strays.py` finds and terminates leftover processes after
+the fact, by command line (the exported binary path plus `--port=`/`--env_seed=`,
+which only a launched process carries — never the Godot editor,
+`Godot_mono.app`):
+
+```bash
+uv run python -m rl_godot.kill_strays           # find and kill, SIGTERM then SIGKILL
+uv run python -m rl_godot.kill_strays --dry-run  # list without killing
+```
+
 ## `rl_godot/export_env.py`
 
 Thin wrapper around `maze_bots/scripts/export.sh` so you don't have to switch checkouts to
